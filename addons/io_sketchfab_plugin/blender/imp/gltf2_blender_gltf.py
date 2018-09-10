@@ -34,6 +34,10 @@ class BlenderGlTF():
         for scene_idx, scene in enumerate(gltf.data.scenes):
             BlenderScene.create(gltf, scene_idx)
 
+        # Keep selection and active object
+        selected_objects = bpy.context.selected_objects
+        active_object = bpy.context.scene.objects.active
+
         # Armature correction
         # Try to detect bone chains, and set bone lengths
         # To detect if a bone is in a chain, we try to detect if a bone head is aligned
@@ -74,6 +78,15 @@ class BlenderGlTF():
 
         bpy.ops.object.mode_set(mode="OBJECT")
 
+
+        # Restore selection and active object
+        for obj in bpy.context.selected_objects:
+            obj.select = False
+
+        for obj in selected_objects:
+            obj.select = True
+
+        bpy.context.scene.objects.active = active_object
 
     @staticmethod
     def pre_compute(gltf):
