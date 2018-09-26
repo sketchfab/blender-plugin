@@ -80,6 +80,10 @@ class BlenderPrimitive():
                     if vert_idx in range(offset, offset + pyprimitive.vertices_length):
                         cpt_vert = vert_idx - offset
                         mesh.vertices[vert_idx].normal = normal_data[cpt_vert]
+
+                # Should be an import option
+                poly.use_smooth=True
+
         offset = offset + pyprimitive.vertices_length
         return offset
 
