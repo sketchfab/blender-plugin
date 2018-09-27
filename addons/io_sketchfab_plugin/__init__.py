@@ -183,7 +183,8 @@ class SketchfabApi:
         model = get_sketchfab_props().search_results['current'][uid]
         json_data = r.json()
         model.license = json_data['license']['fullName']
-        model.animated = int(json_data['animationCount']) > 0
+        anim_count = int(json_data['animationCount'])
+        model.animated = 'Yes ({} animation(s))'.format(anim_count) if anim_count > 0 else 'No'
         get_sketchfab_props().search_results['current'][uid] = model
 
     def search(self, query, search_cb):
@@ -502,7 +503,7 @@ def draw_model_info(layout, model, context):
         ui_model_stats.label('Verts: {}  |  Faces: {}'.format(Utils.humanify_number(model.vertex_count), Utils.humanify_number(model.face_count)), icon='MESH_DATA')
 
     if(model.animated):
-        ui_model_props.label('Animation is not supported (possible issues)', icon='ERROR')
+        ui_model_props.label('Animated: ' + model.animated, icon='ANIM_DATA')
 
     import_ops = ui_model_props.column()
     skfb = get_sketchfab_props()
@@ -578,7 +579,6 @@ def import_model(gltf_path, uid):
 def build_search_request(query, pbr, animated, staffpick, face_count, category, sort_by):
     final_query = '&q={}'.format(query)
 
-    # Disabled until animation import is implemented
     if animated:
         final_query = final_query + '&animated=true'
 
@@ -864,6 +864,7 @@ class FiltersPanel(View3DPanel, bpy.types.Panel):
 
         col.prop(props, "pbr")
         col.prop(props, "staffpick")
+        col.prop(props, "animated")
 
         col.separator()
         col.prop(props, "categories")
@@ -1224,11 +1225,11 @@ classes = (
 
 def check_plugin_version(request, *args, **kwargs):
     response = request.json()
+    skfb = get_sketchfab_props()
     if response and len(response):
         latest_release_version = response[0]['tag_name'].replace('.', '')
         current_version = str(bl_info['version']).replace(',', '').replace('(', '').replace(')', '').replace(' ', '')
 
-        skfb = get_sketchfab_props()
         if latest_release_version == current_version:
             print('You are using the latest version({})'.format(response[0]['tag_name']))
             skfb.is_latest_version = 1
