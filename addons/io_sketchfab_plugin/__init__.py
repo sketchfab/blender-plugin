@@ -88,6 +88,9 @@ def refresh_search(self, context):
     pprops = get_sketchfab_props_proxy()
     props = get_sketchfab_props()
 
+    if 'current' in props.search_results:
+        del props.search_results['current']
+
     props.query = pprops.query
     props.animated = pprops.animated
     props.pbr = pprops.pbr
@@ -179,13 +182,19 @@ class SketchfabApi:
         model_infothr.start()
 
     def handle_model_info(self, r, *args, **kwargs):
+        skfb = get_sketchfab_props()
         uid = get_uid_from_model_url(r.url)
-        model = get_sketchfab_props().search_results['current'][uid]
+
+        # Dirty fix to avoid processing obsolete result data
+        if 'current' not in skfb.search_results or uid not in skfb.search_results['current']:
+            return
+
+        model = skfb.search_results['current'][uid]
         json_data = r.json()
         model.license = json_data['license']['fullName']
         anim_count = int(json_data['animationCount'])
         model.animated = 'Yes ({} animation(s))'.format(anim_count) if anim_count > 0 else 'No'
-        get_sketchfab_props().search_results['current'][uid] = model
+        skfb.search_results['current'][uid] = model
 
     def search(self, query, search_cb):
         search_query = '{}{}'.format(Config.BASE_SEARCH, query)
@@ -623,6 +632,11 @@ def parse_results(r, *args, **kwargs):
     skfb.search_results['current'] = OrderedDict()
 
     for result in list(json_data['results']):
+
+        # Dirty fix to avoid parsing obsolete data
+        if 'current' not in skfb.search_results:
+            return
+
         uid = result['uid']
         skfb.search_results['current'][result['uid']] = SketchfabModel(result)
 
