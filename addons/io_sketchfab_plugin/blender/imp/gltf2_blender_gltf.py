@@ -34,6 +34,10 @@ class BlenderGlTF():
         for scene_idx, scene in enumerate(gltf.data.scenes):
             BlenderScene.create(gltf, scene_idx)
 
+        # Keep selection and active object
+        selected_objects = bpy.context.selected_objects
+        active_object = bpy.context.scene.objects.active
+
         # Armature correction
         # Try to detect bone chains, and set bone lengths
         # To detect if a bone is in a chain, we try to detect if a bone head is aligned
@@ -72,6 +76,17 @@ class BlenderGlTF():
                     if (parent.tail - parent.head).normalized().dot(save_parent_direction) < 0.9:
                         parent.tail = save_parent_tail
 
+        bpy.ops.object.mode_set(mode="OBJECT")
+
+
+        # Restore selection and active object
+        for obj in bpy.context.selected_objects:
+            obj.select = False
+
+        for obj in selected_objects:
+            obj.select = True
+
+        bpy.context.scene.objects.active = active_object
 
     @staticmethod
     def pre_compute(gltf):
@@ -102,13 +117,13 @@ class BlenderGlTF():
                     else:
                         material.pbr_metallic_roughness.base_color_factor = [1.0,1.0,1.0,1.0]
 
-                    if material.pbr_metallic_roughness.metallic_factor:
-                        if material.pbr_metallic_roughness.metallic_type == gltf.TEXTURE and material.pbr_metallic_roughness.mettalic_factor != 1.0:
+                    if material.pbr_metallic_roughness.metallic_factor is not None:
+                        if material.pbr_metallic_roughness.metallic_type == gltf.TEXTURE and material.pbr_metallic_roughness.metallic_factor != 1.0:
                             material.pbr_metallic_roughness.metallic_type = gltf.TEXTURE_FACTOR
                     else:
                         material.pbr_metallic_roughness.metallic_factor = 1.0
 
-                    if material.pbr_metallic_roughness.roughness_factor:
+                    if material.pbr_metallic_roughness.roughness_factor is not None:
                         if material.pbr_metallic_roughness.metallic_type == gltf.TEXTURE and material.pbr_metallic_roughness.roughness_factor != 1.0:
                             material.pbr_metallic_roughness.metallic_type = gltf.TEXTURE_FACTOR
                     else:
@@ -147,7 +162,10 @@ class BlenderGlTF():
 
             # skin management
             if node.skin is not None and node.mesh is not None:
-                gltf.data.skins[node.skin].node_id = node_idx
+                if not hasattr(gltf.data.skins[node.skin], "node_ids"):
+                    gltf.data.skins[node.skin].node_ids = []
+
+                gltf.data.skins[node.skin].node_ids.append(node_idx)
 
             # transform management
             if node.matrix:
