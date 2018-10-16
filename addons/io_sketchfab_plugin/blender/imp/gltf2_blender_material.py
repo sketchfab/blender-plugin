@@ -49,9 +49,6 @@ class BlenderMaterial():
             # create pbr material
             BlenderPbr.create(gltf, pymaterial.pbr_metallic_roughness, mat.name, vertex_color)
 
-        if pymaterial.alpha_mode != 'OPAQUE':
-            BlenderMaterial.blender_alpha(gltf, material_idx)
-
         # add emission map if needed
         if pymaterial.emissive_texture is not None:
             BlenderEmissiveMap.create(gltf, material_idx)
@@ -64,6 +61,9 @@ class BlenderMaterial():
         # will be pack, but not used
         if pymaterial.occlusion_texture is not None:
             BlenderOcclusionMap.create(gltf, material_idx)
+
+        if pymaterial.alpha_mode != None and pymaterial.alpha_mode != 'OPAQUE':
+            BlenderMaterial.blender_alpha(gltf, material_idx)
 
     @staticmethod
     def set_uvmap(gltf, material_idx, prim, obj):
