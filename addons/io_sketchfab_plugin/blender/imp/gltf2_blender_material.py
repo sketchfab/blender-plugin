@@ -130,8 +130,7 @@ class BlenderMaterial():
             mult = node_tree.nodes.new('ShaderNodeMath')
             mult.operation = 'MULTIPLY' if pymaterial.alpha_mode == 'BLEND' else 'GREATER_THAN'
             mult.location = 500, -250
-
-            alpha_cutoff = 1.0 if pymaterial.alpha_mode == 'BLEND' else pymaterial.alpha_cutoff if pymaterial.alpha_cutoff is not None else 0.5
+            alpha_cutoff = 1.0 if pymaterial.alpha_mode == 'BLEND' else 1.0 - pymaterial.alpha_cutoff if pymaterial.alpha_cutoff is not None else 0.5
             mult.inputs[1].default_value = alpha_cutoff
             node_tree.links.new(inverter.outputs['Color'], mult.inputs[0])
             node_tree.links.new(mult.outputs['Value'], add.inputs[0])
