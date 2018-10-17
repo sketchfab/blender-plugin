@@ -35,7 +35,7 @@ class BlenderScene():
         pyscene = gltf.data.scenes[scene_idx]
 
         # Create Yup2Zup empty
-        name = root_name if root_name else "Yup2Zup"
+        name = root_name if root_name else "GLTF_model"
         obj_rotation = bpy.data.objects.new(name, None)
         obj_rotation.rotation_mode = 'QUATERNION'
         obj_rotation.rotation_quaternion = Quaternion((sqrt(2)/2, sqrt(2)/2,0.0,0.0))

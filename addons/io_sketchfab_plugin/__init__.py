@@ -770,11 +770,7 @@ class ImportModalOperator(bpy.types.Operator):
         if not success:
             print('Failed to read GLTF')
         try:
-            # model_name = 'GLTFModel'
-            # if 'extras' in gltf_data.scene.gltf.json['asset'] and 'title' in gltf_data.scene.gltf.json['asset']['extras']:
-            #     model_name = gltf_data.scene.gltf.json['asset']['extras']['title']
-
-            BlenderGlTF.create(gltf_importer)
+            BlenderGlTF.create(gltf_importer, root_name=Utils.make_model_name(gltf_importer.data))
             set_import_status('')
             Utils.clean_downloaded_model_dir(self.uid)
             return {'FINISHED'}

@@ -27,12 +27,11 @@ from ...io.com.gltf2_io_trs import *
 class BlenderGlTF():
 
     @staticmethod
-    def create(gltf):
+    def create(gltf, root_name=None):
 
         BlenderGlTF.pre_compute(gltf)
-
         for scene_idx, scene in enumerate(gltf.data.scenes):
-            BlenderScene.create(gltf, scene_idx)
+            BlenderScene.create(gltf, scene_idx, root_name=root_name)
 
         # Keep selection and active object
         selected_objects = bpy.context.selected_objects

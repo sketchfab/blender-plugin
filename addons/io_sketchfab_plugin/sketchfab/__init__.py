@@ -148,6 +148,12 @@ class Utils:
 
         return best_thumbnail
 
+    def make_model_name(gltf_data):
+        if 'title' in gltf_data.asset.extras:
+            return gltf_data.asset.extras['title']
+
+        return 'GLTFModel'
+
 
 class Cache:
     SKETCHFAB_CACHE_FILE = os.path.join(os.path.dirname(__file__), ".cache")
