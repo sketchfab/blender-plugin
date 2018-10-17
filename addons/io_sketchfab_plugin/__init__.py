@@ -138,7 +138,6 @@ class SketchfabApi:
         self.headers = {}
         Cache.delete_key('username')
         Cache.delete_key('access_token')
-        Cache.delete_key('Test')
         Cache.delete_key('key')
 
     def request_user_info(self):
@@ -811,7 +810,7 @@ class View3DPanel:
 
 
 class LoginPanel(View3DPanel, bpy.types.Panel):
-    bl_idname = "VIEW3D_PT_test_1"
+    bl_idname = "VIEW3D_PT_Login"
     bl_label = "Log in to your Sketchfab account"
 
     is_logged = BoolProperty()
@@ -856,7 +855,6 @@ class LoginPanel(View3DPanel, bpy.types.Panel):
         doc_ui = self.layout.row()
         doc_ui.operator('wm.skfb_help', text='Documentation', icon='QUESTION')
         doc_ui.operator('wm.skfb_report_issue', text='Report an issue', icon='ERROR')
-
 
         layout = self.layout
 
