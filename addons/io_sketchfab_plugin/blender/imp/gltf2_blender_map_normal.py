@@ -63,9 +63,7 @@ class BlenderNormalMap():
         else:
             uvmap["gltf2_texcoord"] = 0 #TODO set in pre_compute instead of here
 
-        text  = node_tree.nodes.new('ShaderNodeTexImage')
-        text.image = bpy.data.images[gltf.data.images[gltf.data.textures[pymaterial.normal_texture.index].source].blender_image_name]
-        text.label = 'NORMALMAP'
+        text  = BlenderTextureNode.create(gltf, pymaterial.normal_texture.index, node_tree, 'NORMALMAP')
         text.color_space = 'NONE'
         text.location = -500, -500
 
