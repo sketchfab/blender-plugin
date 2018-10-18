@@ -43,7 +43,7 @@ bl_info = {
     'author': 'Sketchfab',
     'license': 'GPL',
     'deps': '',
-    'version': (1, 0, 0),
+    'version': (1, 0, 1),
     'blender': (2, 7, 9),
     'location': 'View3D > Tools > Sketchfab',
     'warning': '',
@@ -138,7 +138,6 @@ class SketchfabApi:
         self.headers = {}
         Cache.delete_key('username')
         Cache.delete_key('access_token')
-        Cache.delete_key('Test')
         Cache.delete_key('key')
 
     def request_user_info(self):
@@ -770,11 +769,7 @@ class ImportModalOperator(bpy.types.Operator):
         if not success:
             print('Failed to read GLTF')
         try:
-            # model_name = 'GLTFModel'
-            # if 'extras' in gltf_data.scene.gltf.json['asset'] and 'title' in gltf_data.scene.gltf.json['asset']['extras']:
-            #     model_name = gltf_data.scene.gltf.json['asset']['extras']['title']
-
-            BlenderGlTF.create(gltf_importer)
+            BlenderGlTF.create(gltf_importer, root_name=Utils.make_model_name(gltf_importer.data))
             set_import_status('')
             Utils.clean_downloaded_model_dir(self.uid)
             return {'FINISHED'}
@@ -815,7 +810,7 @@ class View3DPanel:
 
 
 class LoginPanel(View3DPanel, bpy.types.Panel):
-    bl_idname = "VIEW3D_PT_test_1"
+    bl_idname = "VIEW3D_PT_Login"
     bl_label = "Log in to your Sketchfab account"
 
     is_logged = BoolProperty()
@@ -860,7 +855,6 @@ class LoginPanel(View3DPanel, bpy.types.Panel):
         doc_ui = self.layout.row()
         doc_ui.operator('wm.skfb_help', text='Documentation', icon='QUESTION')
         doc_ui.operator('wm.skfb_report_issue', text='Report an issue', icon='ERROR')
-
 
         layout = self.layout
 

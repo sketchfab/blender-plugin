@@ -49,9 +49,6 @@ class BlenderMaterial():
             # create pbr material
             BlenderPbr.create(gltf, pymaterial.pbr_metallic_roughness, mat.name, vertex_color)
 
-        if pymaterial.alpha_mode != 'OPAQUE':
-            BlenderMaterial.blender_alpha(gltf, material_idx)
-
         # add emission map if needed
         if pymaterial.emissive_texture is not None:
             BlenderEmissiveMap.create(gltf, material_idx)
@@ -64,6 +61,9 @@ class BlenderMaterial():
         # will be pack, but not used
         if pymaterial.occlusion_texture is not None:
             BlenderOcclusionMap.create(gltf, material_idx)
+
+        if pymaterial.alpha_mode != None and pymaterial.alpha_mode != 'OPAQUE':
+            BlenderMaterial.blender_alpha(gltf, material_idx)
 
     @staticmethod
     def set_uvmap(gltf, material_idx, prim, obj):
@@ -130,8 +130,7 @@ class BlenderMaterial():
             mult = node_tree.nodes.new('ShaderNodeMath')
             mult.operation = 'MULTIPLY' if pymaterial.alpha_mode == 'BLEND' else 'GREATER_THAN'
             mult.location = 500, -250
-
-            alpha_cutoff = 1.0 if pymaterial.alpha_mode == 'BLEND' else pymaterial.alpha_cutoff if pymaterial.alpha_cutoff is not None else 0.5
+            alpha_cutoff = 1.0 if pymaterial.alpha_mode == 'BLEND' else 1.0 - pymaterial.alpha_cutoff if pymaterial.alpha_cutoff is not None else 0.5
             mult.inputs[1].default_value = alpha_cutoff
             node_tree.links.new(inverter.outputs['Color'], mult.inputs[0])
             node_tree.links.new(mult.outputs['Value'], add.inputs[0])
