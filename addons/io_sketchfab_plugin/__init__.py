@@ -37,6 +37,36 @@ from .io import *
 from .blender.imp.gltf2_blender_gltf import *
 from .sketchfab import Config, Utils, Cache
 
+# Blender 2.79 has been shipped with openssl version 0.9.8 which uses a TLS protocol
+# that is now blocked for security reasons on websites (github.com for example)
+# In order to allow communication with github.com and other websites, the code will intend
+# to use the updated openssl version distributed with the addon.
+# Note: Blender 2.8 will have a more recent openssl version. This fix is only for 2.79 and olders
+if bpy.app.version[1] < 80 and not bpy.app.build_platform == b'Windows':
+    try:
+        sslib_path = None
+        if bpy.app.build_platform == b'Darwin':
+            sslib_path = os.path.join(os.path.dirname(__file__), 'dependencies/_ssl.cpython-35m-darwin.so')
+        elif bpy.app.build_platform == b'Linux':
+            sslib_path = os.path.join(os.path.dirname(__file__), '/io_sketchfab_plugin/_ssl.cpython-35m-x86_64-linux-gnu.so')
+
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("_ssl", sslib_path)
+        new_ssl = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(new_ssl)
+
+
+        from importlib import reload
+        import ssl
+        reload(ssl)
+        from requests.packages.urllib3.util import ssl_
+        reload(ssl_)
+        print('SSL python module has been successfully overriden by Sketchfab addon')
+        print('It might fix other addons having the same refused TLS protocol issue')
+    except Exception as e:
+        print(e)
+        print("Failed to override SSL lib. The plugin will not be able to check for updates")
+
 bl_info = {
     'name': 'Sketchfab Plugin',
     'description': 'Browse and download free Sketchfab downloadable models',
