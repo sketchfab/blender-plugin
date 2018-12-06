@@ -212,7 +212,7 @@ class SketchfabApi:
 
     def handle_model_info(self, r, *args, **kwargs):
         skfb = get_sketchfab_props()
-        uid = get_uid_from_model_url(r.url)
+        uid = Utils.get_uid_from_model_url(r.url)
 
         # Dirty fix to avoid processing obsolete result data
         if 'current' not in skfb.search_results or uid not in skfb.search_results['current']:
@@ -254,7 +254,7 @@ class SketchfabApi:
             return
 
         skfb = get_sketchfab_props()
-        uid = get_uid_from_model_url(r.url)
+        uid = Utils.get_uid_from_model_url(r.url)
 
         gltf = r.json()['gltf']
         skfb_model = get_sketchfab_model(uid)
@@ -270,7 +270,7 @@ class SketchfabApi:
             return
 
         r = requests.get(url, stream=True)
-        uid = get_uid_from_model_url(url)
+        uid = Utils.get_uid_from_download_url(url)
         temp_dir = os.path.join(Config.SKETCHFAB_MODEL_DIR, uid)
         if not os.path.exists(temp_dir):
             os.makedirs(temp_dir)
@@ -564,15 +564,6 @@ def draw_model_info(layout, model, context):
 
 def set_log(log):
     get_sketchfab_props().status = log
-
-
-def get_uid_from_thumbnail_url(thumbnail_url):
-    return thumbnail_url.split('/')[4]
-
-
-def get_uid_from_model_url(model_url):
-    return model_url.split('/')[5]
-
 
 def unzip_archive(archive_path):
     if os.path.exists(archive_path):
@@ -885,6 +876,7 @@ class LoginPanel(View3DPanel, bpy.types.Panel):
         doc_ui = self.layout.row()
         doc_ui.operator('wm.skfb_help', text='Documentation', icon='QUESTION')
         doc_ui.operator('wm.skfb_report_issue', text='Report an issue', icon='ERROR')
+        self.layout.label(Config.SKETCHFAB_TEMP_DIR, icon="SCRIPT")
 
         layout = self.layout
 

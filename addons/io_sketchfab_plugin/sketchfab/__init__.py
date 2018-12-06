@@ -22,6 +22,7 @@
 import os
 import bpy
 import json
+import shutil
 
 class Config:
     ADDON_NAME = 'io_sketchfab'
@@ -134,7 +135,6 @@ class Utils:
 
 
     def clean_downloaded_model_dir(uid):
-        import shutil
         shutil.rmtree(os.path.join(Config.SKETCHFAB_MODEL_DIR, uid))
 
 
@@ -148,11 +148,25 @@ class Utils:
 
         return best_thumbnail
 
+
     def make_model_name(gltf_data):
         if 'title' in gltf_data.asset.extras:
             return gltf_data.asset.extras['title']
 
         return 'GLTFModel'
+
+    def setup_plugin():
+        if not os.path.exists(Config.SKETCHFAB_THUMB_DIR):
+            os.makedirs(Config.SKETCHFAB_THUMB_DIR)
+
+    def get_uid_from_thumbnail_url(thumbnail_url):
+        return thumbnail_url.split('/')[4]
+
+    def get_uid_from_model_url(model_url):
+        return model_url.split('/')[5]
+
+    def get_uid_from_download_url(model_url):
+        return model_url.split('/')[6]
 
 
 class Cache:
