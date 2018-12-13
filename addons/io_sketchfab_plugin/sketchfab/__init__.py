@@ -23,8 +23,17 @@ import os
 import bpy
 import json
 import shutil
+import tempfile
 
 class Config:
+
+    # sometimes the path in preferences is empty
+    def get_temp_path():
+        if bpy.context.user_preferences.filepaths.temporary_directory:
+            return bpy.context.user_preferences.filepaths.temporary_directory
+        else:
+            return tempfile.mkdtemp()
+
     ADDON_NAME = 'io_sketchfab'
     GITHUB_REPOSITORY_URL = 'https://github.com/sketchfab/glTF-Blender-IO'
     GITHUB_REPOSITORY_API_URL = 'https://api.github.com/repos/sketchfab/glTF-Blender-IO'
@@ -47,7 +56,7 @@ class Config:
 
     SKETCHFAB_PLUGIN_VERSION = '{}/releases'.format(GITHUB_REPOSITORY_API_URL)
     # PATH management
-    SKETCHFAB_TEMP_DIR = os.path.join(bpy.context.user_preferences.filepaths.temporary_directory, 'sketchfab_downloads')
+    SKETCHFAB_TEMP_DIR = os.path.join(get_temp_path(), 'sketchfab_downloads')
     SKETCHFAB_THUMB_DIR = os.path.join(SKETCHFAB_TEMP_DIR, 'thumbnails')
     SKETCHFAB_MODEL_DIR = os.path.join(SKETCHFAB_TEMP_DIR, 'imports')
 
