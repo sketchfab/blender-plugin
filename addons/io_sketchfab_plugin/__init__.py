@@ -116,7 +116,22 @@ def get_plugin_enabled():
 
 def refresh_search(self, context):
     pprops = get_sketchfab_props_proxy()
+    if pprops.is_refreshing:
+        return
+
     props = get_sketchfab_props()
+    if pprops.own_models != props.own_models:
+        pprops.is_refreshing = True
+        props.own_models = pprops.own_models
+        # restore all settings
+        pprops.query = ""
+        pprops.animated = False
+        pprops.pbr = False
+        pprops.staffpick = not props.own_models  # No sense to enable filter if own models
+        pprops.categories = 'ALL'
+        pprops.face_count = 'ANY'
+        pprops.sort_by = 'RECENT'
+        pprops.is_refreshing = False
 
     if 'current' in props.search_results:
         del props.search_results['current']
@@ -146,6 +161,7 @@ class SketchfabApi:
     def __init__(self):
         self.access_token = ''
         self.headers = {}
+        self.username = ''
         self.display_name = ''
         self.plan_type = ''
         self.next_results_url = None
@@ -163,6 +179,9 @@ class SketchfabApi:
 
         return False
 
+    def is_user_pro(self):
+        return len(self.plan_type) and self.plan_type != 'basic'
+
     def logout(self):
         self.access_token = ''
         self.headers = {}
@@ -175,13 +194,14 @@ class SketchfabApi:
 
     def get_user_info(self):
         if self.display_name and self.plan_type:
-            return 'as {} ({})'.format(self.display_name, self.plan_type)
+            return '{} ({})'.format(self.display_name, self.plan_type)
         else:
             return ('', '')
 
     def parse_user_info(self, r, *args, **kargs):
         if r.status_code == 200:
             user_data = r.json()
+            self.username = user_data['username']
             self.display_name = user_data['displayName']
             self.plan_type = user_data['account']
         else:
@@ -220,18 +240,21 @@ class SketchfabApi:
 
         model = skfb.search_results['current'][uid]
         json_data = r.json()
-        model.license = json_data['license']['fullName']
+        model.license = json_data.get('license', {}).get('fullName', 'Personal (you own this model)')
         anim_count = int(json_data['animationCount'])
         model.animated = 'Yes ({} animation(s))'.format(anim_count) if anim_count > 0 else 'No'
         skfb.search_results['current'][uid] = model
 
     def search(self, query, search_cb):
-        search_query = '{}{}'.format(Config.BASE_SEARCH, query)
-        searchthr = GetRequestThread(search_query, search_cb)
+        skfb = get_sketchfab_props()
+        url = Config.BASE_SEARCH if not skfb.own_models else Config.BASE_SEARCH_OWN_MODELS
+
+        search_query = '{}{}'.format(url, query)
+        searchthr = GetRequestThread(search_query, search_cb, self.headers)
         searchthr.start()
 
     def search_cursor(self, url, search_cb):
-        requests.get(url, hooks={'response': search_cb})
+        requests.get(url, headers=self.headers, hooks={'response': search_cb})
 
     def download_model(self, uid):
         skfb_model = get_sketchfab_model(uid)
@@ -343,7 +366,7 @@ class SketchfabLoginProps(bpy.types.PropertyGroup):
 
     status = StringProperty(name='', default='')
     status_type = EnumProperty(
-            name="Face Count",
+            name="Login status type",
             items=(('ERROR', "Error", ""),
                        ('INFO', "Information", ""),
                        ('FILE_REFRESH', "Progress", "")),
@@ -403,6 +426,7 @@ class SketchfabBrowserPropsProxy(bpy.types.PropertyGroup):
             default=False,
             update=refresh_search
             )
+
     staffpick = BoolProperty(
             name="Staffpick",
             description="Show only staffpick models",
@@ -410,6 +434,18 @@ class SketchfabBrowserPropsProxy(bpy.types.PropertyGroup):
             update=refresh_search
             )
 
+    own_models = BoolProperty(
+            name="My models (PRO)",
+            description="Browse your own models (full library is only available for PRO account)",
+            default=False,
+            update=refresh_search
+        )
+
+    is_refreshing = BoolProperty(
+        name="Refresh",
+        description="Refresh",
+        default=False,
+    )
 
 class SketchfabBrowserProps(bpy.types.PropertyGroup):
     # Search
@@ -457,6 +493,13 @@ class SketchfabBrowserProps(bpy.types.PropertyGroup):
             description="Show only staffpick models",
             default=False,
             )
+
+    own_models = BoolProperty(
+            name="My models (PRO)",
+            description="Search within my models",
+            default=False,
+            update=refresh_search
+        )
 
     status = StringProperty(name='status', default='idle')
 
@@ -516,11 +559,19 @@ def list_current_results(self, context):
 
 
 def draw_search(layout, context):
-    layout.row()
     props = get_sketchfab_props_proxy()
+    skfb_api = get_sketchfab_props().skfb_api
     col = layout.box().column(align=True)
     col.prop(props, "query")
-    col.operator("wm.sketchfab_search", text="Search", icon='VIEWZOOM')
+    ro = col.row();
+    ownmodels_col = ro.column()
+    ownmodels_col.enabled = skfb_api.is_user_logged();
+    ownmodels_col.prop(props, "own_models")
+
+    ro.operator("wm.sketchfab_search", text="Search", icon='VIEWZOOM')
+    if props.own_models and skfb_api.is_user_logged() and not skfb_api.is_user_pro():
+        layout.label('A PRO account is required to gain full API access', icon='QUESTION')
+        layout.label('      to your personal library')
 
     pprops = get_sketchfab_props()
 
@@ -809,13 +860,14 @@ class ImportModalOperator(bpy.types.Operator):
 
 
 class GetRequestThread(threading.Thread):
-    def __init__(self, url, callback):
+    def __init__(self, url, callback, headers={}):
         self.url = url
         self.callback = callback
+        self.headers = headers
         threading.Thread.__init__(self)
 
     def run(self):
-        requests.get(self.url, hooks={'response': self.callback})
+        requests.get(self.url, headers=self.headers, hooks={'response': self.callback})
 
 
 class View3DPanel:
@@ -1033,7 +1085,8 @@ class SketchfabModel:
         self.face_count = json_data['faceCount']
 
         if 'archives' in json_data and  'gltf' in json_data['archives']:
-            self.download_size = Utils.humanify_size(json_data['archives']['gltf']['size'])
+            if 'size' in json_data['archives']['gltf'] and json_data['archives']['gltf']['size']:
+                self.download_size = Utils.humanify_size(json_data['archives']['gltf']['size'])
         else:
             self.download_size = None
 
