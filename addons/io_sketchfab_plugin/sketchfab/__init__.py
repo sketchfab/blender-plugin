@@ -53,6 +53,7 @@ class Config:
                      '?type=models&downloadable=true' + DEFAULT_FLAGS
 
     SKETCHFAB_ME = '{}/v3/me'.format(SKETCHFAB_URL)
+    BASE_SEARCH_OWN_MODELS = SKETCHFAB_ME + '/search?type=models&downloadable=true'
 
     SKETCHFAB_PLUGIN_VERSION = '{}/releases'.format(GITHUB_REPOSITORY_API_URL)
     # PATH management
