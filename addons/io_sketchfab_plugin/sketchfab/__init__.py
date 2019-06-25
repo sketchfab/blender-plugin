@@ -35,8 +35,8 @@ class Config:
             return tempfile.mkdtemp()
 
     ADDON_NAME = 'io_sketchfab'
-    GITHUB_REPOSITORY_URL = 'https://github.com/sketchfab/glTF-Blender-IO'
-    GITHUB_REPOSITORY_API_URL = 'https://api.github.com/repos/sketchfab/glTF-Blender-IO'
+    GITHUB_REPOSITORY_URL = 'https://github.com/sketchfab/blender-plugin'
+    GITHUB_REPOSITORY_API_URL = 'https://api.github.com/repos/sketchfab/blender-plugin'
     SKETCHFAB_REPORT_URL = 'https://help.sketchfab.com/hc/en-us/requests/new?type=exporters&subject=Blender+Plugin'
 
     SKETCHFAB_URL = 'https://sketchfab.com'
