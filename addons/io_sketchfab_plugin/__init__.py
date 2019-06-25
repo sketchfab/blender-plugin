@@ -77,9 +77,9 @@ bl_info = {
     'blender': (2, 7, 9),
     'location': 'View3D > Tools > Sketchfab',
     'warning': '',
-    'wiki_url': 'https://github.com/sketchfab/glTF-Blender-IO/releases',
-    'tracker_url': 'https://github.com/sketchfab/glTF-Blender-IO/issues',
-    'link': 'https://github.com/sketchfab/glTF-Blender-IO',
+    'wiki_url': 'https://github.com/sketchfab/blender-plugin/releases',
+    'tracker_url': 'https://github.com/sketchfab/blender-plugin/issues',
+    'link': 'https://github.com/sketchfab/blender-plugin',
     'support': 'COMMUNITY',
     'category': 'Import-Export'
     }
