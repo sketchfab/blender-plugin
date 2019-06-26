@@ -1,3 +1,5 @@
+** Temporary: See [PATCH.md] for instructions **
+
 Sketchfab Plugin
 ======================================
 Based on [Blender glTF 2.0 Importer and Exporter](https://github.com/KhronosGroup/glTF-Blender-IO) from [Khronos Group](https://github.com/KhronosGroup)

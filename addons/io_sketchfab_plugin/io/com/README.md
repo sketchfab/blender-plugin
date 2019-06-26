@@ -1,1 +1,0 @@
-glTF 2.0 Python classes.

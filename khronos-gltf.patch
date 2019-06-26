@@ -1,0 +1,91 @@
+diff --git a/addons/io_scene_gltf2/io/com/gltf2_io.py b/addons/io_scene_gltf2/io/com/gltf2_io.py
+index 95a9f9e..c19ae1b 100644
+--- a/addons/io_scene_gltf2/io/com/gltf2_io.py
++++ b/addons/io_scene_gltf2/io/com/gltf2_io.py
+@@ -22,7 +22,7 @@
+ import sys
+ import traceback
+
+-from io_scene_gltf2.io.com import gltf2_io_debug
++from . import gltf2_io_debug
+
+
+ def from_int(x):
+@@ -71,9 +71,15 @@ def from_float(x):
+     assert isinstance(x, (float, int)) and not isinstance(x, bool)
+     return float(x)
+
+-
+ def from_str(x):
+-    assert isinstance(x, str)
++    res = ""
++    if "c4d" in sys.modules: # Cinema4D
++        res = isinstance(x, str) or isinstance(x, unicode)
++    elif "bpy" in sys.modules: # Blender, be explicit
++        res = isinstance(x, str)
++    else: # Other cases
++        res = isinstance(x, str)
++    assert res
+     return x
+
+
+diff --git a/addons/io_scene_gltf2/io/com/gltf2_io_debug.py b/addons/io_scene_gltf2/io/com/gltf2_io_debug.py
+index 51b825a..ccf45e5 100644
+--- a/addons/io_scene_gltf2/io/com/gltf2_io_debug.py
++++ b/addons/io_scene_gltf2/io/com/gltf2_io_debug.py
+@@ -124,3 +124,17 @@ class Log:
+         self.hdlr.setFormatter(formatter)
+         self.logger.addHandler(self.hdlr)
+         self.logger.setLevel(int(loglevel))
++
++    def getLevels():
++        levels = [
++        (str(logging.CRITICAL), "Critical", "", logging.CRITICAL),
++        (str(logging.ERROR), "Error", "", logging.ERROR),
++        (str(logging.WARNING), "Warning", "", logging.WARNING),
++        (str(logging.INFO), "Info", "", logging.INFO),
++        (str(logging.NOTSET), "NotSet", "", logging.NOTSET)
++        ]
++
++        return levels
++
++    def default():
++        return str(logging.ERROR)
+diff --git a/addons/io_scene_gltf2/io/imp/__init__.py b/addons/io_scene_gltf2/io/imp/__init__.py
+index 15e503a..5c2981e 100644
+--- a/addons/io_scene_gltf2/io/imp/__init__.py
++++ b/addons/io_scene_gltf2/io/imp/__init__.py
+@@ -12,4 +12,4 @@
+ # See the License for the specific language governing permissions and
+ # limitations under the License.
+
+-"""IO imp package."""
++from .gltf2_io_gltf import *
+diff --git a/addons/io_scene_gltf2/io/imp/gltf2_io_gltf.py b/addons/io_scene_gltf2/io/imp/gltf2_io_gltf.py
+index 16a4242..cb1567a 100644
+--- a/addons/io_scene_gltf2/io/imp/gltf2_io_gltf.py
++++ b/addons/io_scene_gltf2/io/imp/gltf2_io_gltf.py
+@@ -24,16 +24,20 @@ from os.path import dirname, join, getsize, isfile
+ class glTFImporter():
+     """glTF Importer class."""
+
+-    def __init__(self, filename, import_settings):
++    def __init__(self, filename, loglevel=logging.ERROR):
+         """initialization."""
+         self.filename = filename
+-        self.import_settings = import_settings
+         self.buffers = {}
+
++        """ DIFF
++        self.import_settings = import_settings
+         if 'loglevel' not in self.import_settings.keys():
+             self.import_settings['loglevel'] = logging.ERROR
+-
+         log = Log(import_settings['loglevel'])
++        """
++
++        log = Log(loglevel)
++
+         self.log = log.logger
+         self.log_handler = log.hdlr
+ 

@@ -1,0 +1,4 @@
+[submodule "glTF-Blender-IO"]
+	path = glTF-Blender-IO
+	url = https://github.com/sketchfab/glTF-Blender-IO.git
+	branch = master
