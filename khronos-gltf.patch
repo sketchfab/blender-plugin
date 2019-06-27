@@ -1,3 +1,6 @@
+diff --git a/addons/io_scene_gltf2/io/com/__init__.py b/addons/io_scene_gltf2/io/com/__init__.py
+new file mode 100644
+index 0000000..e69de29
 diff --git a/addons/io_scene_gltf2/io/com/gltf2_io.py b/addons/io_scene_gltf2/io/com/gltf2_io.py
 index 95a9f9e..c19ae1b 100644
 --- a/addons/io_scene_gltf2/io/com/gltf2_io.py
@@ -62,7 +65,7 @@ index 15e503a..5c2981e 100644
 -"""IO imp package."""
 +from .gltf2_io_gltf import *
 diff --git a/addons/io_scene_gltf2/io/imp/gltf2_io_gltf.py b/addons/io_scene_gltf2/io/imp/gltf2_io_gltf.py
-index 16a4242..cb1567a 100644
+index 16a4242..02fd847 100644
 --- a/addons/io_scene_gltf2/io/imp/gltf2_io_gltf.py
 +++ b/addons/io_scene_gltf2/io/imp/gltf2_io_gltf.py
 @@ -24,16 +24,20 @@ from os.path import dirname, join, getsize, isfile
@@ -88,4 +91,5 @@ index 16a4242..cb1567a 100644
 +
          self.log = log.logger
          self.log_handler = log.hdlr
+
  

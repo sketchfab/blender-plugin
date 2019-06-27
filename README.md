@@ -1,5 +1,3 @@
-** Temporary: See [PATCH.md] for instructions **
-
 Sketchfab Plugin
 ======================================
 Based on [Blender glTF 2.0 Importer and Exporter](https://github.com/KhronosGroup/glTF-Blender-IO) from [Khronos Group](https://github.com/KhronosGroup)
@@ -26,6 +24,15 @@ Installation
 
 You can find the instructions in the [release page](https://github.com/sketchfab/glTF-Blender-IO/releases/latest)
 
+To prepare a development version of the plugin, clone the repo and run [build.sh](build.sh) with the **--patch** flag to patch the Khronos gltf code:
+
+```sh
+git clone -b chore/gltf-code-uniformization_D3D-4952 --recursive git@github.com:sketchfab/blender-plugin.git
+cd blender-plugin
+./build.sh --patch
+```
+For the next releases, just run ```./build.sh``` in the repository directory.
+
 
 Report an issue
 ---------------
@@ -37,4 +44,3 @@ First, please have a look at the [limits on the release documentation](https://g
 You can also report through [this link](https://help.sketchfab.com/hc/en-us/requests/new?type=exporters&subject=Blender+Plugin).
 
 It's also possible to do it directly from the plugin, with the **Report an issue** button.
-
