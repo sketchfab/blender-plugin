@@ -185,6 +185,54 @@ class Utils:
     def get_uid_from_download_url(model_url):
         return model_url.split('/')[6]
 
+    def clean_node_hierarchy(objects):
+        """
+        Removes the useless nodes in a hierarchy
+        TODO: Keep the transform (might impact Yup/Zup)
+        """
+        # Find the parent object
+        root = None
+        for object in objects:
+            if object.parent is None:
+                root = object
+        if root is None:
+            return None
+        root_name = root.name
+
+        # Go down its hierarchy until one child has multiple children, or a single mesh
+        # Keep the name while deleting objects in the hierarchy
+        diverges = False
+        while diverges==False:
+            children = root.children
+            if children is not None:
+
+                if len(children)>1:
+                    diverges = True
+                    root.name = root_name
+
+                if len(children)==1:
+                    if children[0].type != "EMPTY":
+                        diverges = True
+                        root.name = root_name
+                        if children[0].type == "MESH": # should always be the case
+                            matrixcopy = children[0].matrix_world.copy()
+                            children[0].parent = None
+                            children[0].matrix_world = matrixcopy
+                            bpy.data.objects.remove(root)
+                            children[0].name = root_name
+
+                    elif children[0].type == "EMPTY":
+                        diverges = False
+                        matrixcopy = children[0].matrix_world.copy()
+                        children[0].parent = None
+                        children[0].matrix_world = matrixcopy
+                        bpy.data.objects.remove(root)
+                        root = children[0]
+            else:
+                break
+
+        # Select the root Empty node
+        root.select_set(True)
 
 class Cache:
     SKETCHFAB_CACHE_FILE = os.path.join(os.path.dirname(__file__), ".cache")
