@@ -93,11 +93,11 @@ class BlenderMesh():
 
         # Create basis shape key
         if max_shape_to_create > 0:
-            obj.shape_key_add("Basis")
+            obj.shape_key_add(name = "Basis")
 
         for i in range(max_shape_to_create):
 
-            obj.shape_key_add("target_" + str(i))
+            obj.shape_key_add(name="target_" + str(i))
 
             offset_idx = 0
             for prim in pymesh.primitives:
@@ -144,7 +144,7 @@ class BlenderMesh():
             if 'COLOR_0' in prim.attributes.keys():
                 # Create vertex color, once only per object
                 if vertex_color is None:
-                    vertex_color = obj.data.vertex_colors.new("COLOR_0")
+                    vertex_color = obj.data.vertex_colors.new(name="COLOR_0")
 
                 color_data = BinaryData.get_data_from_accessor(gltf, prim.attributes['COLOR_0'])
 
@@ -153,6 +153,9 @@ class BlenderMesh():
                         vert_idx = mesh.loops[loop_idx].vertex_index
                         if vert_idx in range(offset, offset + prim.vertices_length):
                             cpt_idx = vert_idx - offset
-                            vertex_color.data[loop_idx].color = color_data[cpt_idx][0:3]
-                            #TODO : no alpha in vertex color
+                            if bpy.app.version < (2, 80, 0):
+                                vertex_color.data[loop_idx].color = tuple(list(color_data[cpt_idx][0:3]))
+                            else:
+                                vertex_color.data[loop_idx].color = tuple(list(color_data[cpt_idx][0:3]) + [1.0])
+
             offset = offset + prim.vertices_length

@@ -23,12 +23,15 @@
 import bpy
 from .gltf2_blender_texture import *
 
+# Version management
+from ..blender_version import Version
+
 class BlenderOcclusionMap():
 
     @staticmethod
     def create(gltf, material_idx):
         engine = bpy.context.scene.render.engine
-        if engine == 'CYCLES':
+        if engine == Version.ENGINE:
             BlenderOcclusionMap.create_cycles(gltf, material_idx)
         else:
             pass #TODO for internal / Eevee in future 2.8

@@ -33,16 +33,20 @@ from bpy.props import (StringProperty,
                        BoolProperty,
                        IntProperty,
                        PointerProperty)
+
 from .io import *
-from .blender.imp.gltf2_blender_gltf import *
 from .sketchfab import Config, Utils, Cache
+from .blender.imp.gltf2_blender_gltf import *
+
+from .blender.blender_version import Version
+
 
 # Blender 2.79 has been shipped with openssl version 0.9.8 which uses a TLS protocol
 # that is now blocked for security reasons on websites (github.com for example)
 # In order to allow communication with github.com and other websites, the code will intend
 # to use the updated openssl version distributed with the addon.
 # Note: Blender 2.8 will have a more recent openssl version. This fix is only for 2.79 and olders
-if bpy.app.version[1] < 80 and not bpy.app.build_platform == b'Windows':
+if bpy.app.version < (2, 80, 0) and not bpy.app.build_platform == b'Windows':
     try:
         sslib_path = None
         if bpy.app.build_platform == b'Darwin':
@@ -67,6 +71,7 @@ if bpy.app.version[1] < 80 and not bpy.app.build_platform == b'Windows':
         print(e)
         print("Failed to override SSL lib. The plugin will not be able to check for updates")
 
+
 bl_info = {
     'name': 'Sketchfab Plugin',
     'description': 'Browse and download free Sketchfab downloadable models',
@@ -74,7 +79,7 @@ bl_info = {
     'license': 'GPL',
     'deps': '',
     'version': (1, 1, 0),
-    'blender': (2, 7, 9),
+    "blender": (2, 80, 0),
     'location': 'View3D > Tools > Sketchfab',
     'warning': '',
     'wiki_url': 'https://github.com/sketchfab/blender-plugin/releases',
@@ -82,7 +87,15 @@ bl_info = {
     'link': 'https://github.com/sketchfab/blender-plugin',
     'support': 'COMMUNITY',
     'category': 'Import-Export'
-    }
+}
+bl_info['blender'] = getattr(bpy.app, "version")
+
+"""
+if bpy.app.version < (2, 80, 0):
+    bl_info["blender"] = (2, 79, 0)
+elif bpy.app.version == (2, 80, 0):
+    bl_info["blender"] = (2, 80, 0)
+"""
 
 PLUGIN_VERSION = str(bl_info['version']).strip('() ').replace(',', '.')
 preview_collection = {}
@@ -344,28 +357,36 @@ class SketchfabLoginProps(bpy.types.PropertyGroup):
                 set_login_status('ERROR', 'Password is empty')
             bpy.ops.wm.sketchfab_login('EXEC_DEFAULT')
 
-    email = StringProperty(
-            name="email",
-            description="User email",
-            default="")
+    """
+    Version.assign_property(self, "email", StringProperty, name="email",
+    description="User email",
+    default="")
+    """
 
-    password = StringProperty(
-            name="password",
-            description="User password",
-            subtype='PASSWORD',
-            default="",
-            update=update_tr
-            )
+    vars()["email"] = StringProperty(
+        name="email",
+        description="User email",
+        default=""
+    )
 
-    access_token = StringProperty(
+
+    vars()["password"] = StringProperty(
+        name="password",
+        description="User password",
+        subtype='PASSWORD',
+        default="",
+        update=update_tr
+    )
+
+    vars()["access_token"] = StringProperty(
             name="access_token",
             description="oauth access token",
             subtype='PASSWORD',
             default=""
             )
 
-    status = StringProperty(name='', default='')
-    status_type = EnumProperty(
+    vars()["status"] = StringProperty(name='', default='')
+    vars()["status_type"] = EnumProperty(
             name="Login status type",
             items=(('ERROR', "Error", ""),
                        ('INFO', "Information", ""),
@@ -374,15 +395,15 @@ class SketchfabLoginProps(bpy.types.PropertyGroup):
             default='FILE_REFRESH'
             )
 
-    last_username = StringProperty(default="default")
-    last_password = StringProperty(default="default")
+    vars()["last_username"] = StringProperty(default="default")
+    vars()["last_password"] = StringProperty(default="default")
 
     skfb_api = SketchfabApi()
 
 
 class SketchfabBrowserPropsProxy(bpy.types.PropertyGroup):
     # Search
-    query = StringProperty(
+    vars()["query"] = StringProperty(
             name="",
             update=refresh_search,
             description="Query to search",
@@ -390,21 +411,21 @@ class SketchfabBrowserPropsProxy(bpy.types.PropertyGroup):
             options={'SKIP_SAVE'}
             )
 
-    pbr = BoolProperty(
+    vars()["pbr"] = BoolProperty(
             name="PBR",
             description="Search for PBR model only",
             default=False,
             update=refresh_search,
             )
 
-    categories = EnumProperty(
+    vars()["categories"] = EnumProperty(
             name="Categories",
             items=Config.SKETCHFAB_CATEGORIES,
             description="Show only models of category",
             default='ALL',
             update=refresh_search
             )
-    face_count = EnumProperty(
+    vars()["face_count"] = EnumProperty(
             name="Face Count",
             items=Config.SKETCHFAB_FACECOUNT,
             description="Determines which meshes are exported",
@@ -412,7 +433,7 @@ class SketchfabBrowserPropsProxy(bpy.types.PropertyGroup):
             update=refresh_search
             )
 
-    sort_by = EnumProperty(
+    vars()["sort_by"] = EnumProperty(
             name="Sort by",
             items=Config.SKETCHFAB_SORT_BY,
             description="Sort ",
@@ -420,28 +441,28 @@ class SketchfabBrowserPropsProxy(bpy.types.PropertyGroup):
             update=refresh_search
             )
 
-    animated = BoolProperty(
+    vars()["animated"] = BoolProperty(
             name="Animated",
             description="Show only models with animation",
             default=False,
             update=refresh_search
             )
 
-    staffpick = BoolProperty(
+    vars()["staffpick"] = BoolProperty(
             name="Staffpick",
             description="Show only staffpick models",
             default=False,
             update=refresh_search
             )
 
-    own_models = BoolProperty(
+    vars()["own_models"] = BoolProperty(
             name="My models (PRO)",
             description="Browse your own models (full library is only available for PRO account)",
             default=False,
             update=refresh_search
         )
 
-    is_refreshing = BoolProperty(
+    vars()["is_refreshing"] = BoolProperty(
         name="Refresh",
         description="Refresh",
         default=False,
@@ -449,79 +470,79 @@ class SketchfabBrowserPropsProxy(bpy.types.PropertyGroup):
 
 class SketchfabBrowserProps(bpy.types.PropertyGroup):
     # Search
-    query = StringProperty(
+    vars()["query"] = StringProperty(
             name="Search",
             description="Query to search",
             default=""
             )
 
-    pbr = BoolProperty(
+    vars()["pbr"] = BoolProperty(
             name="PBR",
             description="Search for PBR model only",
             default=False
             )
 
-    categories = EnumProperty(
+    vars()["categories"] = EnumProperty(
             name="Categories",
             items=Config.SKETCHFAB_CATEGORIES,
             description="Show only models of category",
             default='ALL',
              )
 
-    face_count = EnumProperty(
+    vars()["face_count"] = EnumProperty(
             name="Face Count",
             items=Config.SKETCHFAB_FACECOUNT,
             description="Determines which meshes are exported",
             default='ANY',
             )
 
-    sort_by = EnumProperty(
+    vars()["sort_by"] = EnumProperty(
             name="Sort by",
             items=Config.SKETCHFAB_SORT_BY,
             description="Sort ",
             default='LIKES',
             )
 
-    animated = BoolProperty(
+    vars()["animated"] = BoolProperty(
             name="Animated",
             description="Show only models with animation",
             default=False,
             )
 
-    staffpick = BoolProperty(
+    vars()["staffpick"] = BoolProperty(
             name="Staffpick",
             description="Show only staffpick models",
             default=False,
             )
 
-    own_models = BoolProperty(
+    vars()["own_models"] = BoolProperty(
             name="My models (PRO)",
             description="Search within my models",
             default=False,
             update=refresh_search
         )
 
-    status = StringProperty(name='status', default='idle')
+    vars()["status"] = StringProperty(name='status', default='idle')
 
-    use_preview = BoolProperty(
+    vars()["use_preview"] = BoolProperty(
         name="Use Preview",
         description="Show results using preview widget instead of regular buttons with thumbnails as icons",
         default=True
         )
 
     search_results = {}
-    current_key = StringProperty(name='current', default='current')
-    has_searched_next = BoolProperty(name='next', default=False)
-    has_searched_prev = BoolProperty(name='prev', default=False)
+    vars()["current_key"] = StringProperty(name='current', default='current')
+    vars()["has_searched_next"] = BoolProperty(name='next', default=False)
+    vars()["has_searched_prev"] = BoolProperty(name='prev', default=False)
 
     skfb_api = SketchfabLoginProps.skfb_api
     custom_icons = bpy.utils.previews.new()
-    has_loaded_thumbnails = BoolProperty(default=False)
+    vars()["has_loaded_thumbnails"] = BoolProperty(default=False)
 
-    is_latest_version = IntProperty(default=-1)
+    vars()["is_latest_version"] = IntProperty(default=-1)
 
-    import_status = StringProperty(name='import', default='')
-    is_plugin_enabled = BoolProperty(default=False)
+    vars()["import_status"] = StringProperty(name='import', default='')
+    vars()["is_plugin_enabled"] = BoolProperty(default=False)
 
 
 def list_current_results(self, context):
@@ -570,8 +591,8 @@ def draw_search(layout, context):
 
     ro.operator("wm.sketchfab_search", text="Search", icon='VIEWZOOM')
     if props.own_models and skfb_api.is_user_logged() and not skfb_api.is_user_pro():
-        layout.label('A PRO account is required to gain full API access', icon='QUESTION')
-        layout.label('      to your personal library')
+        layout.label(text='A PRO account is required to gain full API access', icon='QUESTION')
+        layout.label(text='      to your personal library')
 
     pprops = get_sketchfab_props()
 
@@ -579,20 +600,20 @@ def draw_search(layout, context):
 def draw_model_info(layout, model, context):
     ui_model_props = layout.box().column(align=True)
     ui_model_props.operator("wm.sketchfab_view", text="View on Sketchfab", icon='WORLD').model_uid = model.uid
-    ui_model_props.label('{}'.format(model.title), icon='OBJECT_DATA')
-    ui_model_props.label('{}'.format(model.author), icon='ARMATURE_DATA')
+    ui_model_props.label(text='{}'.format(model.title), icon='OBJECT_DATA')
+    ui_model_props.label(text='{}'.format(model.author), icon='ARMATURE_DATA')
 
     if model.license:
-        ui_model_props.label('{}'.format(model.license), icon='TEXT')
+        ui_model_props.label(text='{}'.format(model.license), icon='TEXT')
     else:
-        ui_model_props.label('Fetching..')
+        ui_model_props.label(text='Fetching..')
 
     if model.vertex_count and model.face_count:
         ui_model_stats = ui_model_props.row()
-        ui_model_stats.label('Verts: {}  |  Faces: {}'.format(Utils.humanify_number(model.vertex_count), Utils.humanify_number(model.face_count)), icon='MESH_DATA')
+        ui_model_stats.label(text='Verts: {}  |  Faces: {}'.format(Utils.humanify_number(model.vertex_count), Utils.humanify_number(model.face_count)), icon='MESH_DATA')
 
     if(model.animated):
-        ui_model_props.label('Animated: ' + model.animated, icon='ANIM_DATA')
+        ui_model_props.label(text='Animated: ' + model.animated, icon='ANIM_DATA')
 
     import_ops = ui_model_props.column()
     skfb = get_sketchfab_props()
@@ -608,7 +629,7 @@ def draw_model_info(layout, model, context):
         downloadlabel = skfb.import_status
 
     download_icon = 'EXPORT' if import_ops.enabled else 'INFO'
-    import_ops.label('')
+    import_ops.label(text='')
     import_ops.operator("wm.sketchfab_download", icon=download_icon, text=downloadlabel, translate=False, emboss=True).model_uid = model.uid
 
 
@@ -743,7 +764,10 @@ class ThumbnailCollector(threading.Thread):
     def handle_thumbnail(self, r, *args, **kwargs):
         uid = r.url.split('/')[4]
         if not os.path.exists(Config.SKETCHFAB_THUMB_DIR):
-            os.makedirs(Config.SKETCHFAB_THUMB_DIR)
+            try:
+                os.makedirs(Config.SKETCHFAB_THUMB_DIR)
+            except:
+                pass
         thumbnail_path = os.path.join(Config.SKETCHFAB_THUMB_DIR, uid) + '.jpeg'
 
         with open(thumbnail_path, "wb") as f:
@@ -835,7 +859,7 @@ class ImportModalOperator(bpy.types.Operator):
         return {'FINISHED'}
 
     def modal(self, context, event):
-        bpy.context.scene.render.engine = 'CYCLES'
+        bpy.context.scene.render.engine = Version.ENGINE
         gltf_importer = glTFImporter(self.gltf_path, Log.default())
         success, txt = gltf_importer.read()
         if not success:
@@ -874,8 +898,8 @@ class View3DPanel:
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'TOOLS'
     bl_label = "Sketchfab Assets Browser"
-    bl_category = "Sketchfab"
     bl_context = 'objectmode'
+    bl_category = "Sketchfab" if bpy.app.version == (2, 79, 0) else ""
 
     @classmethod
     def poll(cls, context):
@@ -900,12 +924,12 @@ class LoginPanel(View3DPanel, bpy.types.Panel):
             layout.enabled = get_plugin_enabled()
             if skfb_login.skfb_api.is_user_logged():
                 login_row = layout.row()
-                login_row.label('Logged in as {}'.format(skfb_login.skfb_api.get_user_info()))
-                login_row.operator('wm.sketchfab_login', text='Logout', icon='GO_LEFT').authenticate = False
+                login_row.label(text='Logged in as {}'.format(skfb_login.skfb_api.get_user_info()))
+                login_row.operator('wm.sketchfab_login', text='Logout', icon='DISCLOSURE_TRI_RIGHT').authenticate = False
                 if skfb_login.status:
                     layout.prop(skfb_login, 'status', icon=skfb_login.status_type)
             else:
-                layout.label("Login to your Sketchfab account", icon='INFO')
+                layout.label(text="Login to your Sketchfab account", icon='INFO')
                 layout.prop(skfb_login, "email")
                 layout.prop(skfb_login, "password")
                 ops_row = layout.row()
@@ -928,7 +952,7 @@ class LoginPanel(View3DPanel, bpy.types.Panel):
         doc_ui = self.layout.row()
         doc_ui.operator('wm.skfb_help', text='Documentation', icon='QUESTION')
         doc_ui.operator('wm.skfb_report_issue', text='Report an issue', icon='ERROR')
-        self.layout.label(Config.SKETCHFAB_TEMP_DIR, icon="SCRIPT")
+        self.layout.label(text=Config.SKETCHFAB_TEMP_DIR, icon="SCRIPT")
 
         layout = self.layout
 
@@ -951,11 +975,11 @@ class FiltersPanel(View3DPanel, bpy.types.Panel):
         col.separator()
         col.prop(props, "categories")
 
-        col.label('Sort by')
+        col.label(text='Sort by')
         sb = col.row()
         sb.prop(props, "sort_by", expand=True)
 
-        col.label('Face count')
+        col.label(text='Face count')
         col.prop(props, "face_count", expand=True)
 
 
@@ -982,7 +1006,7 @@ def draw_results_icons(results, props, nbcol=4):
                     col2.operator("wm.sketchfab_modelview", text="{}".format(model.title + ' by ' + model.author)).uid = list(current.keys())[index]
     else:
         results.row()
-        results.row().label('No results')
+        results.row().label(text='No results')
         results.row()
 
 
@@ -1010,7 +1034,7 @@ class ResultsPanel(View3DPanel, bpy.types.Panel):
 
         result_label = 'Click below to see more results'
 
-        col.label(result_label, icon='INFO')
+        col.label(text=result_label, icon='INFO')
         try:
             col.template_icon_view(bpy.context.window_manager, 'result_previews', show_labels=True, scale=5.0)
         except Exception:
@@ -1063,7 +1087,7 @@ class SketchfabLogger(bpy.types.Operator):
 
 # Operator to perform search on Sketchfab
 class SketchfabBrowse(View3DPanel, bpy.types.Panel):
-    bl_idname = "wm.sketchfab_browse"
+    bl_idname = "wm.sketchfab_browse" if bpy.app.version == (2, 79, 0) else "VIEW3D_PT_sketchfab_browse"
     bl_label = "Search"
 
     def draw(self, context):

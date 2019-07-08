@@ -31,6 +31,9 @@ from ..com.gltf2_blender_image_util import *
 from io_scene_gltf2.blender.com import gltf2_blender_json
 from io_scene_gltf2.io.com import gltf2_io
 
+# Version management
+from ...blender.blender_version import Version
+
 #
 # Functions
 #
@@ -876,7 +879,7 @@ def bake_action(export_settings, blender_object, blender_action):
 
     #
 
-    bpy.context.scene.objects.active = blender_object
+    Version.set_active_object(blender_object)
     blender_object.animation_data.action = blender_action
 
     #
@@ -1842,7 +1845,7 @@ def generate_nodes(operator,
                 if blender_object.animation_data is not None:
                     temp_action = blender_object.animation_data.action
 
-                bpy.context.scene.objects.active = blender_object
+                Version.set_active_object(blender_object)
                 bpy.ops.object.mode_set(mode='POSE')
                 bpy.ops.nla.bake(frame_start=bpy.context.scene.frame_current, frame_end=bpy.context.scene.frame_current,
                                  only_selected=False, visual_keying=True, clear_constraints=False,

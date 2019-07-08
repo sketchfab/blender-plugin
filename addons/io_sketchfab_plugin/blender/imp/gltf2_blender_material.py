@@ -81,6 +81,14 @@ class BlenderMaterial():
         material = bpy.data.materials[pymaterial.blender_material]
 
         node_tree = material.node_tree
+
+        #Fix alphas for 2.8
+        if bpy.app.version == (2, 80, 0):
+            if pymaterial.alpha_mode == 'BLEND':
+                material.blend_method = 'BLEND'
+            else:
+                material.blend_method = 'CLIP'
+
          # Add nodes for basic transparency
         # Add mix shader between output and Principled BSDF
         trans = node_tree.nodes.new('ShaderNodeBsdfTransparent')

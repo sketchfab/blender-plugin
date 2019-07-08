@@ -22,6 +22,9 @@
 
 import bpy
 
+# Version management
+from ..blender_version import Version
+
 class BlenderCamera():
 
     @staticmethod
@@ -47,5 +50,10 @@ class BlenderCamera():
 
 
         obj = bpy.data.objects.new(pycamera.name, cam)
-        bpy.data.scenes[gltf.blender_scene].objects.link(obj)
+
+        if bpy.app.version == (2, 79, 0):
+            Version.link(gltf.blender_scene, obj)
+        else:
+            bpy.context.scene.collection.children[-1].objects.link(obj)
+
         return obj

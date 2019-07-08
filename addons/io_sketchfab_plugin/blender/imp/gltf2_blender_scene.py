@@ -27,6 +27,9 @@ from .gltf2_blender_node import *
 from .gltf2_blender_skin import *
 from .gltf2_blender_animation import *
 
+# Version management
+from ..blender_version import Version
+
 class BlenderScene():
 
     @staticmethod
@@ -40,6 +43,13 @@ class BlenderScene():
         obj_rotation.rotation_mode = 'QUATERNION'
         obj_rotation.rotation_quaternion = Quaternion((sqrt(2)/2, sqrt(2)/2,0.0,0.0))
 
+        # Create collection and link it to scene.
+        # Assuming that py.context.scene.collection.children[-1] will always return this collection
+        if bpy.app.version == (2, 80, 0):
+            import_collection = bpy.data.collections.new(root_name if root_name else 'GLTF_Collection')
+            bpy.context.scene.collection.children.link(import_collection)
+            import_collection.objects.link(obj_rotation)
+
         # Create a new scene only if not already exists in .blend file
         # TODO : put in current scene instead ?
         if pyscene.name not in [scene.name for scene in bpy.data.scenes]:
@@ -47,14 +57,14 @@ class BlenderScene():
                 scene = bpy.data.scenes.new(pyscene.name)
             else:
                 scene = bpy.context.scene
-            scene.render.engine = "CYCLES"
+
+            scene.render.engine = Version.ENGINE
 
             gltf.blender_scene = scene.name
         else:
             gltf.blender_scene = pyscene.name
 
-        for selected in bpy.context.selected_objects:
-            selected.select = False
+        bpy.ops.object.select_all(action='DESELECT')
 
         for node_idx in pyscene.nodes:
             BlenderNode.create(gltf, node_idx, None) # None => No parent
@@ -81,20 +91,15 @@ class BlenderScene():
 
 
         # Parent root node to rotation object
-        bpy.data.scenes[gltf.blender_scene].objects.link(obj_rotation)
+        Version.link(gltf.blender_scene, obj_rotation)
+
         for node_idx in pyscene.nodes:
             bpy.data.objects[gltf.data.nodes[node_idx].blender_object].parent = obj_rotation
 
         # Place imported model on cursor
-        obj_rotation.location = bpy.context.scene.cursor_location
+        obj_rotation.location = bpy.context.scene.cursor_location if bpy.app.version == (2, 79, 0) else bpy.context.scene.cursor.location
 
         # Make object selected to allow to transform it directly after import
-        try:
-            for selected in bpy.context.selected_objects:
-                selected.select = False
-
-            bpy.context.scene.objects.active = obj_rotation
-            obj_rotation.select = True
-        except Exception as e:
-            print(e)
-            pass
+        bpy.ops.object.select_all(action='DESELECT')
+        for o in obj_rotation.children:
+            Version.select(o)

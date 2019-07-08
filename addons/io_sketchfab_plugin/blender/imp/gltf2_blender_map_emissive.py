@@ -24,12 +24,15 @@ import bpy
 from .gltf2_blender_texture import *
 from ..com.gltf2_blender_material_helpers import *
 
+# Version management
+from ..blender_version import Version
+
 class BlenderEmissiveMap():
 
     @staticmethod
     def create(gltf, material_idx):
         engine = bpy.context.scene.render.engine
-        if engine == 'CYCLES':
+        if engine == Version.ENGINE:
             BlenderEmissiveMap.create_cycles(gltf, material_idx)
         else:
             pass #TODO for internal / Eevee in future 2.8
@@ -44,12 +47,14 @@ class BlenderEmissiveMap():
         BlenderTextureInfo.create(gltf, pymaterial.emissive_texture.index)
 
         # retrieve principled node and output node
-        principled = get_preoutput_node_output(node_tree)
+        principled = get_preoutput_node(node_tree)
         output = [node for node in node_tree.nodes if node.type == 'OUTPUT_MATERIAL'][0]
 
         # add nodes
         emit = node_tree.nodes.new('ShaderNodeEmission')
         emit.location = 0,1000
+        emit.inputs['Strength'].default_value = 1.0;
+
         if pymaterial.emissive_factor != [1.0,1.0,1.0]:
             separate = node_tree.nodes.new('ShaderNodeSeparateRGB')
             separate.location = -750, 1000
@@ -96,11 +101,6 @@ class BlenderEmissiveMap():
             node_tree.links.new(combine.inputs[0], math_R.outputs[0])
             node_tree.links.new(combine.inputs[1], math_G.outputs[0])
             node_tree.links.new(combine.inputs[2], math_B.outputs[0])
-            node_tree.links.new(emit.inputs[0], combine.outputs[0])
+            node_tree.links.new(principled.inputs[17], combine.outputs[0])
         else:
-            node_tree.links.new(emit.inputs[0], text.outputs[0])
-
-        # following  links will modify PBR node tree
-        node_tree.links.new(add.inputs[0], emit.outputs[0])
-        node_tree.links.new(add.inputs[1], principled)
-        node_tree.links.new(output.inputs[0], add.outputs[0])
+            node_tree.links.new(principled.inputs[17], text.outputs[0])
