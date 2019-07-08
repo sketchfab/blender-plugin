@@ -875,9 +875,11 @@ class ImportModalOperator(bpy.types.Operator):
         if not success:
             print('Failed to read GLTF')
         try:
+            old_objects = [o.name for o in bpy.data.objects] # Get the current objects inorder to find the new node hierarchy
             BlenderGlTF.create(gltf_importer, root_name=Utils.make_model_name(gltf_importer.data))
             set_import_status('')
             Utils.clean_downloaded_model_dir(self.uid)
+            Utils.clean_node_hierarchy([o for o in bpy.data.objects if o.name not in old_objects])
             return {'FINISHED'}
         except Exception:
             import traceback
