@@ -47,7 +47,7 @@ class BlenderEmissiveMap():
         BlenderTextureInfo.create(gltf, pymaterial.emissive_texture.index)
 
         # retrieve principled node and output node
-        principled = get_preoutput_node(node_tree)
+        preoutput = get_preoutput_node(node_tree)
         output = [node for node in node_tree.nodes if node.type == 'OUTPUT_MATERIAL'][0]
 
         # add nodes
@@ -93,6 +93,7 @@ class BlenderEmissiveMap():
         # create links
         node_tree.links.new(mapping.inputs[0], uvmap.outputs[0])
         node_tree.links.new(text.inputs[0], mapping.outputs[0])
+
         if pymaterial.emissive_factor != [1.0,1.0,1.0]:
             node_tree.links.new(separate.inputs[0], text.outputs[0])
             node_tree.links.new(math_R.inputs[0], separate.outputs[0])
@@ -101,6 +102,15 @@ class BlenderEmissiveMap():
             node_tree.links.new(combine.inputs[0], math_R.outputs[0])
             node_tree.links.new(combine.inputs[1], math_G.outputs[0])
             node_tree.links.new(combine.inputs[2], math_B.outputs[0])
-            node_tree.links.new(principled.inputs[17], combine.outputs[0])
+            #node_tree.links.new(principled.inputs[17], combine.outputs[0])
         else:
-            node_tree.links.new(principled.inputs[17], text.outputs[0])
+            pass#node_tree.links.new(principled.inputs[17], text.outputs[0])
+
+        # Create links for the emission part
+        if preoutput.type == "BSDF_PRINCIPLED":
+            node_tree.links.new( text.outputs["Color"], preoutput.inputs["Emission"] )
+        else:
+            node_tree.links.new( text.outputs["Color"],       emit.inputs["Color"] )
+            node_tree.links.new( emit.outputs["Emission"],    add.inputs[0] )
+            node_tree.links.new( preoutput.outputs["Shader"], add.inputs[1] )
+            node_tree.links.new( add.outputs["Shader"],       output.inputs["Surface"] )
