@@ -23,11 +23,14 @@
 import bpy
 from .gltf2_blender_texture import *
 
+# Version management
+from ..blender_version import Version
+
 class BlenderPbr():
 
     def create(gltf, pypbr, mat_name, vertex_color):
         engine = bpy.context.scene.render.engine
-        if engine == 'CYCLES':
+        if engine == Version.ENGINE:
             BlenderPbr.create_cycles(gltf, pypbr, mat_name, vertex_color)
         else:
             pass #TODO for internal / Eevee in future 2.8
@@ -258,7 +261,7 @@ class BlenderPbr():
         elif pypbr.metallic_type == gltf.TEXTURE:
             BlenderTextureInfo.create(gltf, pypbr.metallic_roughness_texture.index)
             metallic_text = BlenderTextureNode.create(gltf, pypbr.metallic_roughness_texture.index, node_tree, 'METALLIC ROUGHNESS')
-            metallic_text.color_space = 'NONE'
+            Version.set_colorspace(metallic_text)
             metallic_text.location = -500,0
 
             metallic_separate = node_tree.nodes.new('ShaderNodeSeparateRGB')
@@ -286,7 +289,7 @@ class BlenderPbr():
 
             BlenderTextureInfo.create(gltf, pypbr.metallic_roughness_texture.index)
             metallic_text = BlenderTextureNode.create(gltf, pypbr.metallic_roughness_texture.index, node_tree, 'METALLIC ROUGHNESS')
-            metallic_text.color_space = 'NONE'
+            Version.set_colorspace(metallic_text)
             metallic_text.location = -1000,0
 
             metallic_separate = node_tree.nodes.new('ShaderNodeSeparateRGB')

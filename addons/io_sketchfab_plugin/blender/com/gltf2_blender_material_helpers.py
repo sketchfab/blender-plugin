@@ -40,6 +40,10 @@ def get_diffuse_texture(node_tree):
 
     return None
 
+def get_preoutput_node(node_tree):
+    output_node = get_output_node(node_tree)
+    return output_node.inputs['Surface'].links[0].from_node
+
 def get_preoutput_node_output(node_tree):
     output_node = get_output_node(node_tree)
     preoutput_node = output_node.inputs['Surface'].links[0].from_node

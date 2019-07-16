@@ -89,8 +89,9 @@ class BlenderPrimitive():
 
     def set_UV(gltf, pyprimitive, obj, mesh, offset):
         for texcoord in [attr for attr in pyprimitive.attributes.keys() if attr[:9] == "TEXCOORD_"]:
-            if not texcoord in mesh.uv_textures:
-                mesh.uv_textures.new(texcoord)
+            _layer = mesh.uv_textures if bpy.app.version == (2,79,0) else mesh.uv_layers
+            if not texcoord in _layer:
+                _layer.new(name=texcoord)
                 pyprimitive.blender_texcoord[int(texcoord[9:])] = texcoord
 
             texcoord_data = BinaryData.get_data_from_accessor(gltf, pyprimitive.attributes[texcoord])

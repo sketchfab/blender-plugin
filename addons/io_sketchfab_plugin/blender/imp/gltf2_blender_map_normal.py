@@ -23,12 +23,15 @@
 import bpy
 from .gltf2_blender_texture import *
 
+# Version management
+from ..blender_version import Version
+
 class BlenderNormalMap():
 
     @staticmethod
     def create(gltf, material_idx):
         engine = bpy.context.scene.render.engine
-        if engine == 'CYCLES':
+        if engine == Version.ENGINE:
             BlenderNormalMap.create_cycles(gltf, material_idx)
         else:
             pass #TODO for internal / Eevee in future 2.8
@@ -64,7 +67,7 @@ class BlenderNormalMap():
             uvmap["gltf2_texcoord"] = 0 #TODO set in pre_compute instead of here
 
         text  = BlenderTextureNode.create(gltf, pymaterial.normal_texture.index, node_tree, 'NORMALMAP')
-        text.color_space = 'NONE'
+        Version.set_colorspace(text)
         text.location = -500, -500
 
         normalmap_node = node_tree.nodes.new('ShaderNodeNormalMap')
@@ -82,7 +85,7 @@ class BlenderNormalMap():
 
         # following  links will modify PBR node tree
         if principled:
-            node_tree.links.new(principled.inputs[17], normalmap_node.outputs[0])
+            node_tree.links.new(principled.inputs[19], normalmap_node.outputs[0])
         if diffuse:
             node_tree.links.new(diffuse.inputs[2], normalmap_node.outputs[0])
         if glossy:

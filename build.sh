@@ -21,7 +21,9 @@ then
   cd glTF-Blender-IO/
   git apply ../khronos-gltf.patch
   cp -r ./addons/io_scene_gltf2/io/ ../addons/io_sketchfab_plugin/io/
-  cd ../
+  cd ../addons/io_sketchfab_plugin/io/
+  sed -i 's/io_scene_gltf2.io/./g' ./*/*.py
+  cd ../../../
 else
   # Create the ZIP files for release
   mkdir -p releases

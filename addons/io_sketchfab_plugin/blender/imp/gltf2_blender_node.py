@@ -26,6 +26,9 @@ from .gltf2_blender_camera import *
 from .gltf2_blender_skin import *
 from ..com.gltf2_blender_conversion import *
 
+# Version management
+from ..blender_version import Version
+
 class BlenderNode():
 
     @staticmethod
@@ -56,7 +59,11 @@ class BlenderNode():
 
             obj = bpy.data.objects.new(name, mesh)
             obj.rotation_mode = 'QUATERNION'
-            bpy.data.scenes[gltf.blender_scene].objects.link(obj)
+
+            if bpy.app.version == (2, 79, 0):
+                Version.link(gltf.blender_scene, obj)
+            else:
+                bpy.context.scene.collection.children[-1].objects.link(obj)
 
             # Transforms apply only if this mesh is not skinned
             # See implementation node of gltf2 specification
@@ -113,7 +120,13 @@ class BlenderNode():
             gltf.log.info("Blender create Empty node")
             obj = bpy.data.objects.new("Node", None)
         obj.rotation_mode = 'QUATERNION'
-        bpy.data.scenes[gltf.blender_scene].objects.link(obj)
+
+        if bpy.app.version == (2, 79, 0):
+            Version.link(gltf.blender_scene, obj)
+        else:
+            bpy.context.scene.collection.children[-1].objects.link(obj)
+
+
         BlenderNode.set_transforms(gltf, node_idx, pynode, obj, parent)
         pynode.blender_object = obj.name
         BlenderNode.set_parent(gltf, pynode, obj, parent)
@@ -133,27 +146,31 @@ class BlenderNode():
             if node_idx == parent:
                 if node.is_joint == True:
                     bpy.ops.object.select_all(action='DESELECT')
-                    bpy.data.objects[node.blender_armature_name].select = True
-                    bpy.context.scene.objects.active = bpy.data.objects[node.blender_armature_name]
+                    Version.select(bpy.data.objects[node.blender_armature_name])
+                    Version.set_active_object(bpy.data.objects[node.blender_armature_name])
                     bpy.ops.object.mode_set(mode='EDIT')
                     bpy.data.objects[node.blender_armature_name].data.edit_bones.active = bpy.data.objects[node.blender_armature_name].data.edit_bones[node.blender_bone_name]
                     bpy.ops.object.mode_set(mode='OBJECT')
                     bpy.ops.object.select_all(action='DESELECT')
-                    obj.select = True
-                    bpy.data.objects[node.blender_armature_name].select = True
-                    bpy.context.scene.objects.active = bpy.data.objects[node.blender_armature_name]
-                    bpy.context.scene.update()
+                    Version.select(obj)
+                    Version.select(bpy.data.objects[node.blender_armature_name])
+                    Version.set_active_object(bpy.data.objects[node.blender_armature_name])
+                    bpy.context.object.update_tag(refresh={'OBJECT', 'DATA', 'TIME'})
                     bpy.ops.object.parent_set(type='BONE_RELATIVE', keep_transform=True)
+
                     # From world transform to local (-armature transform -bone transform)
-                    bone_trans = bpy.data.objects[node.blender_armature_name].pose.bones[node.blender_bone_name].matrix.to_translation().copy()
-                    bone_rot = bpy.data.objects[node.blender_armature_name].pose.bones[node.blender_bone_name].matrix.to_quaternion().copy()
+                    #bone_trans = bpy.data.objects[node.blender_armature_name].pose.bones[node.blender_bone_name].matrix.to_translation().copy()
+                    #bone_rot = bpy.data.objects[node.blender_armature_name].pose.bones[node.blender_bone_name].matrix.to_quaternion().copy()
+                    bone_trans = node.blender_bone_matrix.to_translation().copy()
+                    bone_rot   = node.blender_bone_matrix.to_quaternion().copy()
+
                     bone_scale_mat = Conversion.scale_to_matrix(node.blender_bone_matrix.to_scale())
-                    obj.location = bone_scale_mat * obj.location
-                    obj.location = bone_rot * obj.location
+                    obj.location = Version.mat_mult(bone_scale_mat, obj.location)
+                    obj.location = Version.mat_mult(bone_rot, obj.location)
                     obj.location += bone_trans
-                    obj.location = bpy.data.objects[node.blender_armature_name].matrix_world.to_quaternion() * obj.location
-                    obj.rotation_quaternion = obj.rotation_quaternion * bpy.data.objects[node.blender_armature_name].matrix_world.to_quaternion()
-                    obj.scale = bone_scale_mat * obj.scale
+                    obj.location = Version.mat_mult(bpy.data.objects[node.blender_armature_name].matrix_world.to_quaternion(), obj.location)
+                    obj.rotation_quaternion = Version.mat_mult(obj.rotation_quaternion, bpy.data.objects[node.blender_armature_name].matrix_world.to_quaternion())
+                    obj.scale = Version.mat_mult(bone_scale_mat, obj.scale)
 
                     return
                 if node.blender_object:

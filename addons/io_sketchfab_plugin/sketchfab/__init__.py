@@ -25,14 +25,21 @@ import json
 import shutil
 import tempfile
 
+
 class Config:
 
     # sometimes the path in preferences is empty
     def get_temp_path():
-        if bpy.context.user_preferences.filepaths.temporary_directory:
-            return bpy.context.user_preferences.filepaths.temporary_directory
+        if bpy.app.version == (2, 79, 0):
+            if bpy.context.user_preferences.filepaths.temporary_directory:
+                return bpy.context.user_preferences.filepaths.temporary_directory
+            else:
+                return tempfile.mkdtemp()
         else:
-            return tempfile.mkdtemp()
+            if bpy.context.preferences.filepaths.temporary_directory:
+                return bpy.context.preferences.filepaths.temporary_directory
+            else:
+                return tempfile.mkdtemp()
 
     ADDON_NAME = 'io_sketchfab'
     GITHUB_REPOSITORY_URL = 'https://github.com/sketchfab/blender-plugin'

@@ -23,13 +23,16 @@
 import bpy
 from .gltf2_blender_texture import *
 
+# Version management
+from ..blender_version import Version
+
 class BlenderKHR_materials_pbrSpecularGlossiness():
 
 
     @staticmethod
     def create(gltf, pbrSG, mat_name, vertex_color):
         engine = bpy.context.scene.render.engine
-        if engine == 'CYCLES':
+        if engine == Version.ENGINE:
             BlenderKHR_materials_pbrSpecularGlossiness.create_cycles(gltf, pbrSG, mat_name, vertex_color)
         else:
             pass #TODO for internal / Eevee in future 2.8
@@ -232,14 +235,14 @@ class BlenderKHR_materials_pbrSpecularGlossiness():
 
                 node_tree.links.new(separate.inputs[0], text_node.outputs[0])
 
-                node_tree.links.new(principled.inputs[0], combine.outputs[0])
-
                 node_tree.links.new(math_vc_R.inputs[0], separate.outputs[0])
                 node_tree.links.new(math_vc_G.inputs[0], separate.outputs[1])
                 node_tree.links.new(math_vc_B.inputs[0], separate.outputs[2])
 
             else:
-                node_tree.links.new(diffuse.inputs[0], text_node.outputs[0])
+                pass
+
+            node_tree.links.new(diffuse.inputs[0], text_node.outputs[0])
 
             # Common for both mode (non vertex color / vertex color)
 
@@ -261,7 +264,8 @@ class BlenderKHR_materials_pbrSpecularGlossiness():
             BlenderTextureInfo.create(gltf, pbrSG['specularGlossinessTexture']['index'])
             spec_text = node_tree.nodes.new('ShaderNodeTexImage')
             spec_text.image = bpy.data.images[gltf.data.images[gltf.data.textures[pbrSG['specularGlossinessTexture']['index']].source].blender_image_name]
-            spec_text.color_space = 'NONE'
+
+            Version.set_colorspace(spec_text)
             spec_text.location = -500,0
 
             spec_mapping = node_tree.nodes.new('ShaderNodeMapping')
@@ -287,7 +291,7 @@ class BlenderKHR_materials_pbrSpecularGlossiness():
 
             spec_text = node_tree.nodes.new('ShaderNodeTexImage')
             spec_text.image = bpy.data.images[gltf.data.images[gltf.data.textures[pbrSG['specularGlossinessTexture']['index']].source].blender_image_name]
-            spec_text.color_space = 'NONE'
+            Version.set_colorspace(spec_text)
             spec_text.location = -1000,0
 
             spec_math     = node_tree.nodes.new('ShaderNodeMath')
