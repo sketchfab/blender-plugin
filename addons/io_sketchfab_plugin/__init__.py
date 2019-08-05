@@ -90,12 +90,6 @@ bl_info = {
 }
 bl_info['blender'] = getattr(bpy.app, "version")
 
-"""
-if bpy.app.version < (2, 80, 0):
-    bl_info["blender"] = (2, 79, 0)
-elif bpy.app.version == (2, 80, 0):
-    bl_info["blender"] = (2, 80, 0)
-"""
 
 PLUGIN_VERSION = str(bl_info['version']).strip('() ').replace(',', '.')
 preview_collection = {}
@@ -357,11 +351,6 @@ class SketchfabLoginProps(bpy.types.PropertyGroup):
                 set_login_status('ERROR', 'Password is empty')
             bpy.ops.wm.sketchfab_login('EXEC_DEFAULT')
 
-    """
-    Version.assign_property(self, "email", StringProperty, name="email",
-    description="User email",
-    default="")
-    """
 
     vars()["email"] = StringProperty(
         name="email",
