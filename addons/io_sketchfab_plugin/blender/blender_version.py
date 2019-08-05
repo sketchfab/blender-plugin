@@ -7,6 +7,11 @@ class Version:
     ENGINE = "CYCLES" if bpy.app.version < (2, 80, 0) else "BLENDER_EEVEE"
 
     # Selection / Deselection
+    def get_selected(obj):
+        if bpy.app.version < (2, 80, 0):
+            return obj.select
+        else:
+            return obj.select_get()
     def select(obj):
         if bpy.app.version < (2, 80, 0):
             obj.select = True
@@ -18,6 +23,18 @@ class Version:
         else:
             obj.select_set(False)
 
+    # Visibility
+    def get_visible(obj):
+        if bpy.app.version < (2, 80, 0):
+            return obj.hide
+        else:
+            return obj.visible_get()
+    def set_visible(obj, visible):
+        if bpy.app.version < (2, 80, 0):
+            obj.hide = not visible
+        else:
+            obj.hide_set(not visible)
+    
     # Object linking
     def link(scene, obj):
         if bpy.app.version < (2, 80, 0):
