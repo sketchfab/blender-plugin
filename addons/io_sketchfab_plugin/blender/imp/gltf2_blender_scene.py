@@ -45,7 +45,7 @@ class BlenderScene():
 
         # Create collection and link it to scene.
         # Assuming that py.context.scene.collection.children[-1] will always return this collection
-        if bpy.app.version == (2, 80, 0):
+        if bpy.app.version >= (2, 80, 0):
             import_collection = bpy.data.collections.new(root_name if root_name else 'GLTF_Collection')
             bpy.context.scene.collection.children.link(import_collection)
             import_collection.objects.link(obj_rotation)
