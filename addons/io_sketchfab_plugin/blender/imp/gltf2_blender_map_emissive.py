@@ -107,10 +107,11 @@ class BlenderEmissiveMap():
             pass#node_tree.links.new(principled.inputs[17], text.outputs[0])
 
         # Create links for the emission part
-        if preoutput.type == "BSDF_PRINCIPLED":
+        if preoutput.type == "BSDF_PRINCIPLED" and bpy.app.version >= (2,80,0):
             node_tree.links.new( text.outputs["Color"], preoutput.inputs["Emission"] )
         else:
+            # Preoutput's output[0] will always be a ShaderSocket type
             node_tree.links.new( text.outputs["Color"],       emit.inputs["Color"] )
             node_tree.links.new( emit.outputs["Emission"],    add.inputs[0] )
-            node_tree.links.new( preoutput.outputs["Shader"], add.inputs[1] )
+            node_tree.links.new( preoutput.outputs[0],        add.inputs[1] )
             node_tree.links.new( add.outputs["Shader"],       output.inputs["Surface"] )
