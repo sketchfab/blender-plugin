@@ -43,6 +43,9 @@ class BlenderMaterial():
         mat = bpy.data.materials.new(name)
         pymaterial.blender_material = mat.name
 
+        if bpy.app.version >= (2, 80, 0):
+            mat.use_backface_culling = (pymaterial.double_sided != True)
+
         if pymaterial.extensions is not None and 'KHR_materials_pbrSpecularGlossiness' in pymaterial.extensions.keys():
             BlenderKHR_materials_pbrSpecularGlossiness.create(gltf, pymaterial.extensions['KHR_materials_pbrSpecularGlossiness'], mat.name, vertex_color)
         else:
@@ -83,7 +86,7 @@ class BlenderMaterial():
         node_tree = material.node_tree
 
         #Fix alphas for 2.8
-        if bpy.app.version == (2, 80, 0):
+        if bpy.app.version >= (2, 80, 0):
             if pymaterial.alpha_mode == 'BLEND':
                 material.blend_method = 'BLEND'
             else:
