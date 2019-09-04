@@ -93,6 +93,17 @@ def prepare_assets(export_settings):
     for ob in hidden:
         bpy.data.objects.remove(ob)
 
+    # delete unused materials and associated textures (will remove unneeded packed images)
+    for m in bpy.data.meshes:
+        if m.users == 0:
+            bpy.data.meshes.remove(m)
+    for m in bpy.data.materials:
+        if m.users == 0:
+            bpy.data.materials.remove(m)
+    for t in bpy.data.images:
+        if t.users == 0:
+            bpy.data.images.remove(t)
+
 def prepare_file(export_settings):
     prepare_assets(export_settings)
     return save_blend_copy()
