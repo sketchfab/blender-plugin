@@ -103,9 +103,9 @@ Please note that the materials are being converted from Sketchfab to Cycles in B
 
 Scale can vary a lot between different models, and models origins are not always intuitively centered. 
 
-After selecting them in the Outliner (or selecting every object with **A**), you can try to scale the imported models in order to make them visible. Most often, the model will need to be scaled down, and you might want 
+The imported models will always be selected after import, and you can try to scale them in order to make them visible (most often, the model will need to be scaled down).
 
-If it's not enough, select a mesh object in hierarchy and use numpad '.' or Blender menu to focus/align the view on it.
+If it's not enough, try to select a mesh in the Outliner view and use numpad '.' (**View to selected** operator) to center the view on it.
 
 #### Transparency
 
