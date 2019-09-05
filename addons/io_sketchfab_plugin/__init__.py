@@ -1046,12 +1046,54 @@ class SketchfabBrowse(View3DPanel, bpy.types.Panel):
         wm = context.window_manager
         return wm.invoke_props_dialog(self, width=900, height=850)
 
+class SketchfabExportPanel(View3DPanel, bpy.types.Panel):
+    #bl_idname = "wm.sketchfab_export" if bpy.app.version == (2, 79, 0) else "VIEW3D_PT_sketchfab_export"
     bl_options = {'DEFAULT_CLOSED'}
+    bl_label = "Export"
+    bl_idname = "VIEW3D_PT_sketchfab_export"
 
     def draw(self, context):
+
+        api = get_sketchfab_props().skfb_api
+        self.layout.enabled = get_plugin_enabled() and api.is_user_logged()
+
+        wm = context.window_manager
+        props = wm.sketchfab_export
+
         layout = self.layout
 
+        # Selection only
+        layout.prop(props, "selection")
+
+        # Model properties
         col = layout.box().column(align=True)
+        col.prop(props, "title")
+        col.prop(props, "description")
+        col.prop(props, "tags")
+        col.prop(props, "draft")
+        col.prop(props, "private")
+        if props.private:
+            col.prop(props, "password")
+
+        # Upload button
+        row = layout.row()
+        row.scale_y = 2.0
+        upload_label = "Upload"
+        upload_icon  = "EXPORT"
+        upload_enabled = api.is_user_logged() and bpy.context.mode == 'OBJECT'
+        if not upload_enabled:
+            if not api.is_user_logged():
+                upload_label = "Log in to upload models"
+            elif bpy.context.mode != 'OBJECT':
+                upload_label = "Export is only available in object mode"
+        if sf_state.uploading:
+            upload_label = "Uploading %s" % sf_state.size_label
+            upload_icon  = "SORTTIME"
+        row.operator("wm.sketchfab_export", icon=upload_icon, text=upload_label)
+
+        model_url = sf_state.model_url
+        if model_url:
+            layout.operator("wm.url_open", text="View Online Model", icon='URL').url = model_url
 
 def draw_results_icons(results, props, nbcol=4):
     props = get_sketchfab_props()
@@ -1312,12 +1354,10 @@ class SketchfabExportProps(bpy.types.PropertyGroup):
             description="internal use",
             default="",
             )
-    vars()["models"] = EnumProperty(
-            name="Models",
-            items=(('ALL', "All", "Export all meshes in the file"),
-                   ('SELECTION', "Selection", "Only export selected meshes")),
+    vars()["selection"] = BoolProperty(
+            name="Selection only",
             description="Determines which meshes are exported",
-            default='SELECTION',
+            default=False,
             )
     vars()["private"] = BoolProperty(
             name="Private",
@@ -1479,7 +1519,7 @@ class ExportSketchfab(bpy.types.Operator):
 
             with open(SKETCHFAB_EXPORT_DATA_FILE, 'w') as s:
                 json.dump({
-                        "models": props.models,
+                        "selection": props.selection,
                         }, s)
 
             subprocess.check_call([
@@ -1535,6 +1575,7 @@ classes = (
     # Panels
     LoginPanel,
     SketchfabBrowse,
+    SketchfabExportPanel,
     SketchfabPanel,
 
     # Operators
