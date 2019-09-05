@@ -1348,7 +1348,8 @@ class SketchfabExportProps(bpy.types.PropertyGroup):
     vars()["description"] = StringProperty(
             name="Description",
             description="Description of the model (optional)",
-            default="")
+            default="",
+            maxlen=1024)
     vars()["filepath"] = StringProperty(
             name="Filepath",
             description="internal use",
@@ -1376,13 +1377,14 @@ class SketchfabExportProps(bpy.types.PropertyGroup):
             )
     vars()["tags"] = StringProperty(
             name="Tags",
-            description="List of tags, separated by spaces (optional)",
+            description="List of tags (42 max), separated by spaces (optional)",
             default="",
             )
     vars()["title"] = StringProperty(
             name="Title",
             description="Title of the model (determined automatically if left empty)",
             default="",
+            maxlen=48
             )
 
 
@@ -1425,6 +1427,9 @@ def upload(filepath, filename):
     title = props.title
     if not title:
         title = os.path.splitext(os.path.basename(bpy.data.filepath))[0]
+
+    # Limit the number of tags to 42
+    props.tags = " ".join(props.tags.split(" ")[:42])
 
     _data = {
         "name": title,
