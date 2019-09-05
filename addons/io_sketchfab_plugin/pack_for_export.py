@@ -51,7 +51,7 @@ def prepare_assets(export_settings):
     images = set()
 
     # If we did not ask to export all models, do some cleanup
-    if export_settings['models'] == 'SELECTION':
+    if export_settings['selection']:
 
         for ob in bpy.data.objects:
             if ob.type == 'MESH':
@@ -76,7 +76,7 @@ def prepare_assets(export_settings):
                                 if n.image is not None:
                                     images.add(n.image)
 
-            if export_settings['models'] == 'SELECTION' and ob.type == 'MESH':
+            if export_settings['selection'] and ob.type == 'MESH':
                 if not Version.get_selected(ob) or not Version.get_visible(ob):
                     Version.set_visible(ob, False)
                     hidden.add(ob)
