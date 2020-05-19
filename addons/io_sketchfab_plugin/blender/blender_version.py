@@ -26,7 +26,7 @@ class Version:
     # Visibility
     def get_visible(obj):
         if bpy.app.version < (2, 80, 0):
-            return obj.hide
+            return (not obj.hide)
         else:
             return obj.visible_get()
     def set_visible(obj, visible):
