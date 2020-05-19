@@ -235,7 +235,10 @@ class Utils:
         root.select_set(True)
 
 class Cache:
-    SKETCHFAB_CACHE_FILE = os.path.join(os.path.dirname(__file__), ".cache")
+    SKETCHFAB_CACHE_FILE = os.path.join(
+        bpy.utils.user_resource("SCRIPTS", "sketchfab_cache", create=True),
+        ".cache"
+    ) # Use a user path to avoid permission-related errors
 
     def read():
         if not os.path.exists(Cache.SKETCHFAB_CACHE_FILE):
