@@ -125,18 +125,9 @@ def refresh_search(self, context):
         return
 
     props = get_sketchfab_props()
-    if pprops.own_models != props.own_models:
-        pprops.is_refreshing = True
-        props.own_models = pprops.own_models
-        # restore all settings
-        pprops.query = ""
-        pprops.animated = False
-        pprops.pbr = False
-        pprops.staffpick = not props.own_models  # No sense to enable filter if own models
-        pprops.categories = 'ALL'
-        pprops.face_count = 'ANY'
-        pprops.sort_by = 'RECENT'
-        pprops.is_refreshing = False
+
+    if pprops.search_domain != props.search_domain:
+        props.search_domain = pprops.search_domain
 
     if 'current' in props.search_results:
         del props.search_results['current']
@@ -185,7 +176,7 @@ class SketchfabApi:
         return False
 
     def is_user_pro(self):
-        return len(self.plan_type) and self.plan_type != 'basic'
+        return len(self.plan_type) and self.plan_type not in ['basic', 'plus']
 
     def logout(self):
         self.access_token = ''
@@ -193,6 +184,15 @@ class SketchfabApi:
         Cache.delete_key('username')
         Cache.delete_key('access_token')
         Cache.delete_key('key')
+
+        props = get_sketchfab_props()
+        props.search_domain = "DEFAULT"
+        if 'current' in props.search_results:
+            del props.search_results['current']
+        pprops = get_sketchfab_props_proxy()
+        pprops.search_domain = "DEFAULT"
+
+        bpy.ops.wm.sketchfab_search('EXEC_DEFAULT')
 
     def request_user_info(self):
         requests.get(Config.SKETCHFAB_ME, headers=self.headers, hooks={'response': self.parse_user_info})
@@ -252,9 +252,14 @@ class SketchfabApi:
 
     def search(self, query, search_cb):
         skfb = get_sketchfab_props()
-        url = Config.BASE_SEARCH if not skfb.own_models else Config.BASE_SEARCH_OWN_MODELS
+        url = Config.BASE_SEARCH
+        if skfb.search_domain == "OWN":
+            url = Config.BASE_SEARCH_OWN_MODELS
+        elif skfb.search_domain == "STORE":
+            url = Config.PURCHASED_MODELS
 
         search_query = '{}{}'.format(url, query)
+
         searchthr = GetRequestThread(search_query, search_cb, self.headers)
         searchthr.start()
 
@@ -336,7 +341,11 @@ class SketchfabApi:
         else:
             print("Failed to download model (url might be invalid)")
             model = get_sketchfab_model(uid)
-            set_import_status("Import model ({})".format(model.download_size if model.download_size else 'fetching data'))
+
+            import_status = "Import model"
+            if model.download_size:
+                import_status += " ({})".format(model.download_size)
+            set_import_status(import_status)
 
 
 class SketchfabLoginProps(bpy.types.PropertyGroup):
@@ -442,12 +451,13 @@ class SketchfabBrowserPropsProxy(bpy.types.PropertyGroup):
             update=refresh_search
             )
 
-    vars()["own_models"] = BoolProperty(
-            name="My models (PRO)",
-            description="Browse your own models (full library is only available for PRO account)",
-            default=False,
+    vars()["search_domain"] = EnumProperty(
+            name="",
+            items=Config.SKETCHFAB_SEARCH_DOMAIN,
+            description="Search domain ",
+            default='DEFAULT',
             update=refresh_search
-        )
+            )
 
     vars()["is_refreshing"] = BoolProperty(
         name="Refresh",
@@ -503,12 +513,13 @@ class SketchfabBrowserProps(bpy.types.PropertyGroup):
             default=False,
             )
 
-    vars()["own_models"] = BoolProperty(
-            name="My models (PRO)",
-            description="Search within my models",
-            default=False,
+    vars()["search_domain"] = EnumProperty(
+            name="Search domain",
+            items=Config.SKETCHFAB_SEARCH_DOMAIN,
+            description="Search domain ",
+            default='DEFAULT',
             update=refresh_search
-        )
+            )
 
     vars()["status"] = StringProperty(name='status', default='idle')
 
@@ -572,21 +583,26 @@ def draw_search(layout, context):
     skfb_api = get_sketchfab_props().skfb_api
     col = layout.box().column(align=True)
 
-    col.label(text="Search")
+    ro = col.row()
+    ro.label(text="Search")
+    domain_col = ro.column()
+    domain_col.scale_x = 1.5
+    domain_col.enabled = skfb_api.is_user_logged();
+    domain_col.prop(props, "search_domain")
+
     ro = col.row()
     ro.scale_y = 1.25
     ro.prop(props, "query")
     ro.operator("wm.sketchfab_search", text="", icon='VIEWZOOM')
-    ro = col.row()
-    ownmodels_col = ro.column()
-    ownmodels_col.enabled = skfb_api.is_user_logged();
-    ownmodels_col.prop(props, "own_models")
-    if props.own_models and skfb_api.is_user_logged() and not skfb_api.is_user_pro():
-        ownmodels_col.label(text='A PRO account is required to gain full API access', icon='QUESTION')
-        ownmodels_col.label(text='      to your personal library')
+
+    # User selected own models but is not pro
+    if props.search_domain == "OWN" and skfb_api.is_user_logged() and not skfb_api.is_user_pro():
+        col.label(text='A PRO account is required', icon='QUESTION')
+        col.label(text='to access your personal library')
 
     # Display a collapsible box for filters
     col = layout.box().column(align=True)
+    col.enabled = (props.search_domain != "STORE")
     row = col.row()
     row.prop(props, "expanded_filters", icon="TRIA_DOWN" if props.expanded_filters else "TRIA_RIGHT", icon_only=True, emboss=False)
     row.label(text="Search filters")
@@ -632,7 +648,9 @@ def draw_model_info(layout, model, context):
     elif bpy.context.mode != 'OBJECT':
         downloadlabel = "Import is available only in object mode"
     else:
-        downloadlabel = "Import model ({})".format(model.download_size if model.download_size else 'fetching data')
+        downloadlabel = "Import model"
+        if model.download_size:
+            downloadlabel += " ({})".format(model.download_size)
 
     if skfb.import_status:
         downloadlabel = skfb.import_status
