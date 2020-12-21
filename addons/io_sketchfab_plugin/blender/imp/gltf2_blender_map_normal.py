@@ -85,7 +85,7 @@ class BlenderNormalMap():
 
         # following  links will modify PBR node tree
         if principled:
-            node_tree.links.new(principled.inputs[19], normalmap_node.outputs[0])
+            node_tree.links.new(principled.inputs["Normal"], normalmap_node.outputs[0])
         if diffuse:
             node_tree.links.new(diffuse.inputs[2], normalmap_node.outputs[0])
         if glossy:
