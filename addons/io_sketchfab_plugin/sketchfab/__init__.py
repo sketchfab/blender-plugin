@@ -61,6 +61,7 @@ class Config:
 
     SKETCHFAB_ME = '{}/v3/me'.format(SKETCHFAB_URL)
     BASE_SEARCH_OWN_MODELS = SKETCHFAB_ME + '/search?type=models&downloadable=true'
+    PURCHASED_MODELS = SKETCHFAB_ME + "/models/purchases?"
 
     SKETCHFAB_PLUGIN_VERSION = '{}/releases'.format(GITHUB_REPOSITORY_API_URL)
     # PATH management
@@ -99,6 +100,11 @@ class Config:
                          ('LIKES', "Likes", ""),
                          ('VIEWS', "Views", ""),
                          ('RECENT', "Recent", ""))
+
+    SKETCHFAB_SEARCH_DOMAIN = (('DEFAULT', "All site", ""),
+                               ('OWN', "Own Models (PRO)", ""),
+                               ('STORE', "Store purchases", ""))
+
     MAX_THUMBNAIL_HEIGHT = 512
 
 
