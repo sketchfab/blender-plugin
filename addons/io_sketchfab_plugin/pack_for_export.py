@@ -71,7 +71,10 @@ def prepare_assets(export_settings):
                                     images.add(n.image)
 
             if export_settings['selection'] and ob.type == 'MESH':
-                if not Version.get_selected(ob) or not Version.get_visible(ob):
+                # Add relevant objects to the list of objects to remove
+                if not Version.get_visible(ob): # Not visible
+                    hidden.add(ob)
+                elif not Version.get_selected(ob): # Visible but not selected
                     Version.set_visible(ob, False)
                     hidden.add(ob)
 
