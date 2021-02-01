@@ -91,5 +91,13 @@ index 16a4242..02fd847 100644
 +
          self.log = log.logger
          self.log_handler = log.hdlr
-
  
+@@ -159,7 +163,7 @@ class glTFImporter():
+         # glTF file
+         if not self.is_glb_format:
+             self.content = None
+-            with open(self.filename, 'r') as f:
++            with open(self.filename, 'r', encoding='utf8') as f:
+                 content = f.read()
+                 try:
+                     self.data = gltf_from_dict(json.loads(content, parse_constant=glTFImporter.bad_json_value))

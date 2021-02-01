@@ -45,6 +45,8 @@ class BlenderMaterial():
 
         if bpy.app.version >= (2, 80, 0):
             mat.use_backface_culling = (pymaterial.double_sided != True)
+            # Use multiple layers for transparency
+            mat.show_transparent_back = False
 
         if pymaterial.extensions is not None and 'KHR_materials_pbrSpecularGlossiness' in pymaterial.extensions.keys():
             BlenderKHR_materials_pbrSpecularGlossiness.create(gltf, pymaterial.extensions['KHR_materials_pbrSpecularGlossiness'], mat.name, vertex_color)
