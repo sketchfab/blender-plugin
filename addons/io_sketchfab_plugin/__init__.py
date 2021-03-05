@@ -128,6 +128,8 @@ def refresh_search(self, context):
 
     if pprops.search_domain != props.search_domain:
         props.search_domain = pprops.search_domain
+    if pprops.sort_by != props.sort_by:
+        props.sort_by = pprops.sort_by
 
     if 'current' in props.search_results:
         del props.search_results['current']
@@ -138,7 +140,6 @@ def refresh_search(self, context):
     props.staffpick = pprops.staffpick
     props.categories = pprops.categories
     props.face_count = pprops.face_count
-    props.sort_by = pprops.sort_by
     bpy.ops.wm.sketchfab_search('EXEC_DEFAULT')
 
 
@@ -162,6 +163,9 @@ class SketchfabApi:
         self.plan_type = ''
         self.next_results_url = None
         self.prev_results_url = None
+        self.user_orgs = []
+        self.active_org = None
+        self.use_org_profile = False
 
     def build_headers(self):
         self.headers = {'Authorization': 'Bearer ' + self.access_token}
@@ -209,10 +213,75 @@ class SketchfabApi:
             self.username = user_data['username']
             self.display_name = user_data['displayName']
             self.plan_type = user_data['account']
+            requests.get(Config.SKETCHFAB_ME + "/orgs", headers=self.headers, hooks={'response': self.parse_orgs_info})
         else:
             print('Invalid access token')
             self.access_token = ''
             self.headers = {}
+
+    def parse_orgs_info(self, r, *args, **kargs):
+        """
+        Get and store information about user's orgs, and its orgs projects
+        """
+        if r.status_code == 200:
+            orgs_data = r.json()
+
+            # Get a list of the user's orgs
+            for org in orgs_data["results"]:
+                self.user_orgs.append({
+                    "uid":         org["uid"],
+                    "displayName": org["displayName"],
+                    "url":         org["publicProfileUrl"],
+                    "projects":    [],
+                })
+            self.user_orgs.sort(key = lambda x : x["displayName"])
+
+            # Iterate on the orgs to get lists of their projects
+            for org in self.user_orgs:
+
+                # Create the callback inline to keep a reference to the org uid
+                def parse_projects_info(r, *args, **kargs):
+                    """
+                    Get and store information about an org projects
+                    """
+                    if r.status_code == 200:
+                        projects_data = r.json()
+                        projects = projects_data["results"]
+                        # Add the projects to the orgs dict object
+                        for proj in projects:
+                            org_uid = proj["org"]["uid"]
+                            org = next((x for x in self.user_orgs if x["uid"] == org_uid))
+                            org["projects"].append({
+                                "uid":         proj["uid"],
+                                "name":        proj["name"],
+                                "slug":        proj["slug"],
+                                "modelCount":  proj["modelCount"],
+                                "memberCount": proj["memberCount"],
+                            })
+                        org["projects"].sort(key = lambda x : x["name"])
+
+                        # Iterate on all projects (not just the 24 first)
+                        if projects_data["next"] is not None:
+                            requests.get(
+                                projects_data["next"],
+                                headers=self.headers,
+                                hooks={'response': parse_projects_info}
+                            )
+
+                    else:
+                        print('Can not get projects info')
+
+                requests.get("%s/%s/projects" % (Config.SKETCHFAB_ORGS, org["uid"]),
+                    headers=self.headers,
+                    hooks={'response': parse_projects_info})
+
+            # Set the first org as active
+            if len(self.user_orgs):
+                self.active_org = self.user_orgs[0]
+
+            # Iterate on all orgs (not just the 24 first)
+            if orgs_data["next"] is not None:
+                requests.get(orgs_data["next"], headers=self.headers, hooks={'response': self.parse_orgs_info})
 
     def parse_login(self, r, *args, **kwargs):
         if r.status_code == 200 and 'access_token' in r.json():
@@ -232,12 +301,15 @@ class SketchfabApi:
 
     def request_model_info(self, uid):
         url = Config.SKETCHFAB_MODEL + '/' + uid
-        model_infothr = GetRequestThread(url, self.handle_model_info)
+        if self.use_org_profile:
+            url = Config.SKETCHFAB_ORGS + "/" + self.active_org["uid"] + "/models/" + uid
+
+        model_infothr = GetRequestThread(url, self.handle_model_info, self.headers)
         model_infothr.start()
 
     def handle_model_info(self, r, *args, **kwargs):
         skfb = get_sketchfab_props()
-        uid = Utils.get_uid_from_model_url(r.url)
+        uid = Utils.get_uid_from_model_url(r.url, self.use_org_profile)
 
         # Dirty fix to avoid processing obsolete result data
         if 'current' not in skfb.search_results or uid not in skfb.search_results['current']:
@@ -245,18 +317,25 @@ class SketchfabApi:
 
         model = skfb.search_results['current'][uid]
         json_data = r.json()
-        model.license = json_data.get('license', {}).get('fullName', 'Personal (you own this model)')
-        anim_count = int(json_data['animationCount'])
+        model.license = json_data.get('license', {})
+        if model.license is not None:
+            model.license = model.license.get('fullName', 'Personal (you own this model)')
+        anim_count = int(json_data.get('animationCount', 0))
         model.animated = 'Yes ({} animation(s))'.format(anim_count) if anim_count > 0 else 'No'
         skfb.search_results['current'][uid] = model
 
     def search(self, query, search_cb):
         skfb = get_sketchfab_props()
-        url = Config.BASE_SEARCH
-        if skfb.search_domain == "OWN":
+        if skfb.search_domain == "DEFAULT":
+            url = Config.BASE_SEARCH
+        elif skfb.search_domain == "OWN":
             url = Config.BASE_SEARCH_OWN_MODELS
         elif skfb.search_domain == "STORE":
             url = Config.PURCHASED_MODELS
+        elif skfb.search_domain == "ACTIVE_ORG":
+            url = Config.SKETCHFAB_ORGS + "/%s/models?isArchivesReady=true" % self.active_org["uid"]
+        elif len(skfb.search_domain) == 32:
+            url = Config.SKETCHFAB_ORGS + "/%s/models?isArchivesReady=true&projects=%s" % (self.active_org["uid"], skfb.search_domain)
 
         search_query = '{}{}'.format(url, query)
 
@@ -277,17 +356,22 @@ class SketchfabApi:
                 skfb_model.download_url = None
                 skfb_model.url_expires = None
                 skfb_model.time_url_requested = None
-                requests.get(Utils.build_download_url(uid), headers=self.headers, hooks={'response': self.handle_download})
+                requests.get(Utils.build_download_url(uid, self.use_org_profile, self.active_org), headers=self.headers, hooks={'response': self.handle_download})
         else:
-            requests.get(Utils.build_download_url(uid), headers=self.headers, hooks={'response': self.handle_download})
+            requests.get(Utils.build_download_url(uid, self.use_org_profile, self.active_org), headers=self.headers, hooks={'response': self.handle_download})
 
     def handle_download(self, r, *args, **kwargs):
         if r.status_code != 200 or 'gltf' not in r.json():
             print('Download not available for this model')
             return
 
+        print("\n\nDownload data for {}\n{}\n\n".format(
+            Utils.get_uid_from_model_url(r.url, self.use_org_profile),
+            str(r.json())
+        ))
+
         skfb = get_sketchfab_props()
-        uid = Utils.get_uid_from_model_url(r.url)
+        uid = Utils.get_uid_from_model_url(r.url, self.use_org_profile)
 
         gltf = r.json()['gltf']
         skfb_model = get_sketchfab_model(uid)
@@ -341,12 +425,8 @@ class SketchfabApi:
         else:
             print("Failed to download model (url might be invalid)")
             model = get_sketchfab_model(uid)
-
-            import_status = "Import model"
-            if model.download_size:
-                import_status += " ({})".format(model.download_size)
-            set_import_status(import_status)
-
+            set_import_status("Import model ({})".format(model.download_size if model.download_size else 'fetching data'))
+        return
 
 class SketchfabLoginProps(bpy.types.PropertyGroup):
     def update_tr(self, context):
@@ -396,6 +476,56 @@ class SketchfabLoginProps(bpy.types.PropertyGroup):
 
     skfb_api = SketchfabApi()
 
+def get_user_orgs(self, context):
+    api  = get_sketchfab_props().skfb_api
+    return [(org["uid"], org["displayName"], "") for org in api.user_orgs]
+
+def get_org_projects(self, context):
+    api  = get_sketchfab_props().skfb_api
+    return [(proj["uid"], proj["name"], proj["name"]) for proj in api.active_org["projects"]]
+
+def get_available_search_domains(self, context):
+    api = get_sketchfab_props().skfb_api
+
+    search_domains = [domain for domain in Config.SKETCHFAB_SEARCH_DOMAIN]
+
+    if len(api.user_orgs) and api.use_org_profile:
+        search_domains = [
+            ("ACTIVE_ORG", "Active Organization", api.active_org["displayName"], 0)
+        ]
+        for p in get_org_projects(self, context):
+            search_domains.append(p)
+
+    return tuple(search_domains)
+
+def refresh_orgs(self, context):
+
+    pprops = get_sketchfab_props_proxy()
+    if pprops.is_refreshing:
+        return
+
+    props = get_sketchfab_props()
+    api   = props.skfb_api
+
+    api.use_org_profile = pprops.use_org_profile
+    api.active_org      = [org for org in api.user_orgs if org["uid"] == pprops.active_org][0]
+
+    if pprops.use_org_profile != props.use_org_profile:
+        props.use_org_profile = pprops.use_org_profile
+    if pprops.active_org != props.active_org:
+        props.active_org = pprops.active_org
+
+    refresh_search(self, context)
+
+def get_sorting_options(self, context):
+    api = get_sketchfab_props().skfb_api
+    if len(api.user_orgs) and api.use_org_profile:
+        return (
+            ('RELEVANCE', "Relevance", ""),
+            ('RECENT', "Recent", "")
+        )
+    else:
+        return Config.SKETCHFAB_SORT_BY
 
 class SketchfabBrowserPropsProxy(bpy.types.PropertyGroup):
     # Search
@@ -431,10 +561,10 @@ class SketchfabBrowserPropsProxy(bpy.types.PropertyGroup):
 
     vars()["sort_by"] = EnumProperty(
             name="Sort by",
-            items=Config.SKETCHFAB_SORT_BY,
+            items=get_sorting_options,
             description="Sort ",
-            default='LIKES',
-            update=refresh_search
+            default=0,
+            update=refresh_search,
             )
 
     vars()["animated"] = BoolProperty(
@@ -453,11 +583,25 @@ class SketchfabBrowserPropsProxy(bpy.types.PropertyGroup):
 
     vars()["search_domain"] = EnumProperty(
             name="",
-            items=Config.SKETCHFAB_SEARCH_DOMAIN,
+            items=get_available_search_domains,
             description="Search domain ",
-            default='DEFAULT',
+            default=0,
             update=refresh_search
             )
+
+    vars()["use_org_profile"] = BoolProperty(
+        name="Use organisation profile",
+        description="Download/Upload as a member of an organization.\nSearch queries and uploads will be performed to\nthe organisation and project selected below",
+        default=False,
+        update=refresh_orgs
+    )
+
+    vars()["active_org"] = EnumProperty(
+        name="Org",
+        items=get_user_orgs,
+        description="Active org",
+        update=refresh_orgs
+    )
 
     vars()["is_refreshing"] = BoolProperty(
         name="Refresh",
@@ -496,9 +640,10 @@ class SketchfabBrowserProps(bpy.types.PropertyGroup):
 
     vars()["sort_by"] = EnumProperty(
             name="Sort by",
-            items=Config.SKETCHFAB_SORT_BY,
+            items=get_sorting_options,
             description="Sort ",
-            default='LIKES',
+            default=0,
+            update=refresh_search,
             )
 
     vars()["animated"] = BoolProperty(
@@ -515,11 +660,25 @@ class SketchfabBrowserProps(bpy.types.PropertyGroup):
 
     vars()["search_domain"] = EnumProperty(
             name="Search domain",
-            items=Config.SKETCHFAB_SEARCH_DOMAIN,
+            items=get_available_search_domains,
             description="Search domain ",
-            default='DEFAULT',
+            default=0,
             update=refresh_search
             )
+
+    vars()["use_org_profile"] = BoolProperty(
+        name="Use organisation profile",
+        description="Import/Export as a member of an organization\nLOL",
+        default=False,
+        update=refresh_orgs
+    )
+
+    vars()["active_org"] = EnumProperty(
+        name="Org",
+        items=get_user_orgs,
+        description="Active org",
+        update=refresh_orgs
+    )
 
     vars()["status"] = StringProperty(name='status', default='idle')
 
@@ -607,14 +766,19 @@ def draw_search(layout, context):
     row.prop(props, "expanded_filters", icon="TRIA_DOWN" if props.expanded_filters else "TRIA_RIGHT", icon_only=True, emboss=False)
     row.label(text="Search filters")
     if props.expanded_filters:
-        col.separator()
-        col.prop(props, "categories")
-        col.prop(props, "sort_by")
-        col.prop(props, "face_count")
-        row = col.row()
-        row.prop(props, "pbr")
-        row.prop(props, "staffpick")
-        row.prop(props, "animated")
+        if props.search_domain in ["DEFAULT", "OWN"]:
+            col.separator()
+            col.prop(props, "categories")
+            col.prop(props, "sort_by")
+            col.prop(props, "face_count")
+            row = col.row()
+            row.prop(props, "pbr")
+            row.prop(props, "staffpick")
+            row.prop(props, "animated")
+        else:
+            col.separator()
+            col.prop(props, "sort_by")
+            col.prop(props, "face_count")
 
     pprops = get_sketchfab_props()
 
@@ -751,7 +915,7 @@ def parse_results(r, *args, **kwargs):
 
     skfb.search_results['current'] = OrderedDict()
 
-    for result in list(json_data['results']):
+    for result in list(json_data.get('results', [])):
 
         # Dirty fix to avoid parsing obsolete data
         if 'current' not in skfb.search_results:
@@ -764,6 +928,19 @@ def parse_results(r, *args, **kwargs):
             skfb.skfb_api.request_thumbnail(result['thumbnails'])
         elif uid not in skfb.custom_icons:
             skfb.custom_icons.load(uid, os.path.join(Config.SKETCHFAB_THUMB_DIR, "{}.jpeg".format(uid)), 'IMAGE')
+
+        # Make a request to get the download_size for org and own models
+        """
+        model = skfb.search_results['current'][result['uid']]
+        if model.download_size is None:
+            api = skfb.skfb_api
+            def set_download_size(r, *args, **kwargs):
+                json_data = r.json()
+                print(json_data)
+                if 'gltf' in json_data and 'size' in json_data['gltf']:
+                    model.download_size = Utils.humanify_size(json_data['gltf']['size'])
+            requests.get(Utils.build_download_url(uid, api.use_org_profile, api.active_org), headers=api.headers, hooks={'response': set_download_size})
+        """
 
     if json_data['next']:
         skfb.skfb_api.next_results_url = json_data['next']
@@ -992,6 +1169,33 @@ class LoginPanel(View3DPanel, bpy.types.Panel):
                 if skfb_login.status:
                     layout.prop(skfb_login, 'status', icon=skfb_login.status_type)
 
+class TeamsPanel(View3DPanel, bpy.types.Panel):
+    bl_idname = "VIEW3D_PT_sketchfab_teams"
+    bl_label = "Sketchfab for Teams"
+    bl_options = {'DEFAULT_CLOSED'}
+
+    def draw(self, context):
+
+        skfb = get_sketchfab_props()
+        api  = skfb.skfb_api
+
+        self.layout.enabled = get_plugin_enabled() and api.is_user_logged()
+
+        if not api.user_orgs:
+            self.layout.label(text="You are not part of an organization", icon='INFO')
+            self.layout.operator("wm.url_open", text='Learn about Sketchfab for Teams').url = "https://sketchfab.com/features/teams"
+        else:
+            props = get_sketchfab_props_proxy()
+
+            use_org_profile_row = self.layout.row()
+            use_org_profile_row.prop(props, "use_org_profile")
+
+            org_row = self.layout.row()
+            org_row.prop(props, "active_org")
+            org_row.enabled = skfb.skfb_api.use_org_profile
+
+            pprops = get_sketchfab_props()
+
 class SketchfabBrowse(View3DPanel, bpy.types.Panel):
     bl_idname = "VIEW3D_PT_sketchfab_browse"
     bl_label = "Import"
@@ -1089,6 +1293,11 @@ class SketchfabExportPanel(View3DPanel, bpy.types.Panel):
         col.prop(props, "private")
         if props.private:
             col.prop(props, "password")
+
+        # Project selection if member of an org
+        if api.active_org and api.use_org_profile:
+            row = layout.row()
+            row.prop(props, "active_project")
 
         # Upload button
         row = layout.row()
@@ -1401,6 +1610,12 @@ class SketchfabExportProps(bpy.types.PropertyGroup):
             default="",
             maxlen=48
             )
+    vars()["active_project"] = EnumProperty(
+        name="Project",
+        items=get_org_projects,
+        description="Active project",
+        update=refresh_orgs
+    )
 
 
 class _SketchfabState:
@@ -1463,8 +1678,15 @@ def upload(filepath, filename):
     _headers = get_sketchfab_props().skfb_api.headers
 
     try:
+        api = get_sketchfab_props().skfb_api
+        if len(api.user_orgs) and api.use_org_profile:
+            url = "%s/%s/models" % (Config.SKETCHFAB_ORGS, api.active_org["uid"])
+            _data["orgProject"] = props.active_project
+        else:
+            url = Config.SKETCHFAB_MODEL
+
         r = requests.post(
-            Config.SKETCHFAB_MODEL,
+            url,
             data    = _data,
             files   = _files,
             headers = _headers
@@ -1594,6 +1816,7 @@ classes = (
 
     # Panels
     LoginPanel,
+    TeamsPanel,
     SketchfabBrowse,
     SketchfabExportPanel,
     SketchfabPanel,

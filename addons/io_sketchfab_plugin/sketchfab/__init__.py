@@ -52,6 +52,7 @@ class Config:
     SKETCHFAB_API = 'https://api.sketchfab.com'
     SKETCHFAB_SEARCH = SKETCHFAB_API + '/v3/search'
     SKETCHFAB_MODEL = SKETCHFAB_API + '/v3/models'
+    SKETCHFAB_ORGS = SKETCHFAB_API + '/v3/orgs'
     SKETCHFAB_SIGNUP = 'https://sketchfab.com/signup'
 
     BASE_SEARCH = SKETCHFAB_SEARCH + '?type=models&downloadable=true'
@@ -101,9 +102,9 @@ class Config:
                          ('VIEWS', "Views", ""),
                          ('RECENT', "Recent", ""))
 
-    SKETCHFAB_SEARCH_DOMAIN = (('DEFAULT', "All site", ""),
-                               ('OWN', "Own Models (PRO)", ""),
-                               ('STORE', "Store purchases", ""))
+    SKETCHFAB_SEARCH_DOMAIN = (('DEFAULT', "All site", "", 0),
+                               ('OWN', "Own Models (PRO)", "", 1),
+                               ('STORE', "Store purchases", "", 2))
 
     MAX_THUMBNAIL_HEIGHT = 512
 
@@ -140,8 +141,11 @@ class Utils:
         readable = round(readable, 2)
         return '{}{}'.format(readable, suffix)
 
-    def build_download_url(uid):
-        return '{}/{}/download'.format(Config.SKETCHFAB_MODEL, uid)
+    def build_download_url(uid, use_org_profile=False, active_org=None):
+        if use_org_profile:
+            return '{}/{}/models/{}/download'.format(Config.SKETCHFAB_ORGS, active_org["uid"], uid)
+        else:
+            return '{}/{}/download'.format(Config.SKETCHFAB_MODEL, uid)
 
 
     def thumbnail_file_exists(uid):
@@ -185,8 +189,9 @@ class Utils:
     def get_uid_from_thumbnail_url(thumbnail_url):
         return thumbnail_url.split('/')[4]
 
-    def get_uid_from_model_url(model_url):
-        return model_url.split('/')[5]
+    def get_uid_from_model_url(model_url, use_org_profile=False):
+        print("\nget_uid_from_model_url\n%s\n" % model_url)
+        return model_url.split('/')[7] if use_org_profile else model_url.split('/')[5]
 
     def get_uid_from_download_url(model_url):
         return model_url.split('/')[6]
