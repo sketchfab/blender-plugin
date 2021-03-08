@@ -231,6 +231,7 @@ class Utils:
                             children[0].matrix_world = matrixcopy
                             bpy.data.objects.remove(root)
                             children[0].name = root_name
+                            root = children[0]
 
                     elif children[0].type == "EMPTY":
                         diverges = False
