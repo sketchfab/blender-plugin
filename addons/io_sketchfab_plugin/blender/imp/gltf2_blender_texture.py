@@ -65,7 +65,7 @@ class BlenderTextureNode():
 	        text_node.interpolation = 'Linear'
 
 	    if sampler.wrap_s == 33071 or sampler.wrap_t == 33071:
-	        text_node.extension = 'Extend'
+	        text_node.extension = 'EXTEND'
 
 	    if label:
 	        text_node.label = label
