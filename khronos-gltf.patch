@@ -1,39 +1,18 @@
-diff --git a/addons/io_scene_gltf2/io/com/__init__.py b/addons/io_scene_gltf2/io/com/__init__.py
-new file mode 100644
-index 0000000..e69de29
 diff --git a/addons/io_scene_gltf2/io/com/gltf2_io.py b/addons/io_scene_gltf2/io/com/gltf2_io.py
-index 95a9f9e..c19ae1b 100644
+index d00a914d..a51ff4e3 100644
 --- a/addons/io_scene_gltf2/io/com/gltf2_io.py
 +++ b/addons/io_scene_gltf2/io/com/gltf2_io.py
-@@ -22,7 +22,7 @@
+@@ -26,7 +26,7 @@
  import sys
  import traceback
-
+ 
 -from io_scene_gltf2.io.com import gltf2_io_debug
 +from . import gltf2_io_debug
-
-
+ 
+ 
  def from_int(x):
-@@ -71,9 +71,15 @@ def from_float(x):
-     assert isinstance(x, (float, int)) and not isinstance(x, bool)
-     return float(x)
-
--
- def from_str(x):
--    assert isinstance(x, str)
-+    res = ""
-+    if "c4d" in sys.modules: # Cinema4D
-+        res = isinstance(x, str) or isinstance(x, unicode)
-+    elif "bpy" in sys.modules: # Blender, be explicit
-+        res = isinstance(x, str)
-+    else: # Other cases
-+        res = isinstance(x, str)
-+    assert res
-     return x
-
-
 diff --git a/addons/io_scene_gltf2/io/com/gltf2_io_debug.py b/addons/io_scene_gltf2/io/com/gltf2_io_debug.py
-index 51b825a..ccf45e5 100644
+index 290616cc..f987d9e3 100644
 --- a/addons/io_scene_gltf2/io/com/gltf2_io_debug.py
 +++ b/addons/io_scene_gltf2/io/com/gltf2_io_debug.py
 @@ -124,3 +124,17 @@ class Log:
@@ -54,50 +33,50 @@ index 51b825a..ccf45e5 100644
 +
 +    def default():
 +        return str(logging.ERROR)
+\ No newline at end of file
 diff --git a/addons/io_scene_gltf2/io/imp/__init__.py b/addons/io_scene_gltf2/io/imp/__init__.py
-index 15e503a..5c2981e 100644
+index 666fdf3f..81f88469 100644
 --- a/addons/io_scene_gltf2/io/imp/__init__.py
 +++ b/addons/io_scene_gltf2/io/imp/__init__.py
 @@ -12,4 +12,4 @@
  # See the License for the specific language governing permissions and
  # limitations under the License.
-
+ 
 -"""IO imp package."""
 +from .gltf2_io_gltf import *
+\ No newline at end of file
 diff --git a/addons/io_scene_gltf2/io/imp/gltf2_io_gltf.py b/addons/io_scene_gltf2/io/imp/gltf2_io_gltf.py
-index 16a4242..02fd847 100644
+index aa9bda38..f8dca120 100644
 --- a/addons/io_scene_gltf2/io/imp/gltf2_io_gltf.py
 +++ b/addons/io_scene_gltf2/io/imp/gltf2_io_gltf.py
-@@ -24,16 +24,20 @@ from os.path import dirname, join, getsize, isfile
+@@ -30,19 +30,14 @@ class ImportError(RuntimeError):
  class glTFImporter():
      """glTF Importer class."""
-
+ 
 -    def __init__(self, filename, import_settings):
 +    def __init__(self, filename, loglevel=logging.ERROR):
          """initialization."""
          self.filename = filename
 -        self.import_settings = import_settings
+         self.glb_buffer = None
          self.buffers = {}
-
-+        """ DIFF
-+        self.import_settings = import_settings
-         if 'loglevel' not in self.import_settings.keys():
-             self.import_settings['loglevel'] = logging.ERROR
+         self.accessor_cache = {}
+         self.decode_accessor_cache = {}
 -
-         log = Log(import_settings['loglevel'])
-+        """
-+
+-        if 'loglevel' not in self.import_settings.keys():
+-            self.import_settings['loglevel'] = logging.ERROR
+-
+-        log = Log(import_settings['loglevel'])
 +        log = Log(loglevel)
-+
          self.log = log.logger
          self.log_handler = log.hdlr
  
-@@ -159,7 +163,7 @@ class glTFImporter():
-         # glTF file
-         if not self.is_glb_format:
-             self.content = None
--            with open(self.filename, 'r') as f:
-+            with open(self.filename, 'r', encoding='utf8') as f:
-                 content = f.read()
-                 try:
-                     self.data = gltf_from_dict(json.loads(content, parse_constant=glTFImporter.bad_json_value))
+@@ -139,7 +134,7 @@ class glTFImporter():
+         if not isfile(self.filename):
+             raise ImportError("Please select a file")
+ 
+-        with open(self.filename, 'rb') as f:
++        with open(self.filename, 'rb') as f:
+             content = memoryview(f.read())
+ 
+         if content[:4] == b'glTF':

@@ -59,6 +59,7 @@ class BlenderMaterial():
     @staticmethod
     def set_double_sided(pymaterial, mat):
         mat.use_backface_culling = (pymaterial.double_sided != True)
+        mat.show_transparent_back = False
 
     @staticmethod
     def set_alpha_mode(pymaterial, mat):

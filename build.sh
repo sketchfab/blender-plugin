@@ -20,7 +20,7 @@ then
   echo "Trying to apply khronos-gltf.patch"
   cd glTF-Blender-IO/
   git apply ../khronos-gltf.patch
-  cp -r ./addons/io_scene_gltf2/io/ ../addons/io_sketchfab_plugin/io/
+  cp -r ./addons/io_scene_gltf2/io/ ../addons/io_sketchfab_plugin/
   cd ../addons/io_sketchfab_plugin/io/
   sed -i 's/io_scene_gltf2.io/./g' ./*/*.py
   cd ../../../
