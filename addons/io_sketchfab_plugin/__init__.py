@@ -1,5 +1,5 @@
 """
-Copyright 2019 Sketchfab
+Copyright 2021 Sketchfab
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -34,6 +34,7 @@ from bpy.props import (StringProperty,
 
 from .io import *
 from .sketchfab import Config, Utils, Cache
+from .io.imp.gltf2_io_gltf import *
 from .blender.imp.gltf2_blender_gltf import *
 
 from .blender.blender_version import Version
@@ -74,9 +75,9 @@ bl_info = {
     'name': 'Sketchfab Plugin',
     'description': 'Browse and download free Sketchfab downloadable models',
     'author': 'Sketchfab',
-    'license': 'GPL',
+    'license': 'APACHE2',
     'deps': '',
-    'version': (1, 4, 0),
+    'version': (1, 4, 1),
     "blender": (2, 80, 0),
     'location': 'View3D > Tools > Sketchfab',
     'warning': '',
@@ -1064,16 +1065,16 @@ class ImportModalOperator(bpy.types.Operator):
 
     def modal(self, context, event):
         bpy.context.scene.render.engine = Version.ENGINE
-        gltf_importer = glTFImporter(self.gltf_path, Log.default())
-        success, txt = gltf_importer.read()
-        if not success:
-            print('Failed to read GLTF')
+        gltf_importer = glTFImporter(self.gltf_path)
+        gltf_importer.read()
+
         try:
             old_objects = [o.name for o in bpy.data.objects] # Get the current objects inorder to find the new node hierarchy
-            BlenderGlTF.create(gltf_importer, root_name=Utils.make_model_name(gltf_importer.data))
+            BlenderGlTF.create(gltf_importer)
             set_import_status('')
             Utils.clean_downloaded_model_dir(self.uid)
-            Utils.clean_node_hierarchy([o for o in bpy.data.objects if o.name not in old_objects])
+            root_name = Utils.make_model_name(gltf_importer.data)
+            Utils.clean_node_hierarchy([o for o in bpy.data.objects if o.name not in old_objects], root_name)
             return {'FINISHED'}
         except Exception:
             import traceback
