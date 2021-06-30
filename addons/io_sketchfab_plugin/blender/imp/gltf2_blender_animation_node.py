@@ -1,119 +1,173 @@
-"""
- * ***** BEGIN GPL LICENSE BLOCK *****
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software Foundation,
- * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
- *
- * Contributor(s): Julien Duroure.
- *
- * ***** END GPL LICENSE BLOCK *****
- """
+# Copyright 2018-2021 The glTF-Blender-IO authors.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
 import bpy
-from mathutils import Quaternion, Matrix, Vector
+from mathutils import Vector
 
-from ..com.gltf2_blender_conversion import *
-from ...io.imp.gltf2_io_binary import *
+from ...io.imp.gltf2_io_binary import BinaryData
+from .gltf2_blender_animation_utils import make_fcurve
+from .gltf2_blender_vnode import VNode
+
 
 class BlenderNodeAnim():
-
-    @staticmethod
-    def set_interpolation(interpolation, kf):
-        if interpolation == "LINEAR":
-            kf.interpolation = 'LINEAR'
-        elif interpolation == "STEP":
-            kf.interpolation = 'CONSTANT'
-        elif interpolation == "CATMULLROMSPLINE":
-            kf.interpolation = 'BEZIER' #TODO
-        elif interpolation == "CUBICSPLINE":
-            kf.interpolation = 'BEZIER' #TODO
-        else:
-            kf.interpolation = 'BEZIER'
+    """Blender Object Animation."""
+    def __new__(cls, *args, **kwargs):
+        raise RuntimeError("%s should not be instantiated" % cls)
 
     @staticmethod
     def anim(gltf, anim_idx, node_idx):
-
+        """Manage animation targeting a node's TRS."""
+        animation = gltf.data.animations[anim_idx]
         node = gltf.data.nodes[node_idx]
-        obj = bpy.data.objects[node.blender_object]
-        fps = bpy.context.scene.render.fps
-
         if anim_idx not in node.animations.keys():
             return
 
-        animation = gltf.data.animations[anim_idx]
-
-        if animation.name:
-            name = animation.name + "_" + obj.name
-        else:
-            name = "Animation_" + str(anim_idx) + "_" + obj.name
-        action = bpy.data.actions.new(name)
-        if not obj.animation_data:
-            obj.animation_data_create()
-        obj.animation_data.action = bpy.data.actions[action.name]
-
         for channel_idx in node.animations[anim_idx]:
             channel = animation.channels[channel_idx]
+            if channel.target.path not in ['translation', 'rotation', 'scale']:
+                continue
 
-            keys   = BinaryData.get_data_from_accessor(gltf, animation.samplers[channel.sampler].input)
-            values = BinaryData.get_data_from_accessor(gltf, animation.samplers[channel.sampler].output)
+            BlenderNodeAnim.do_channel(gltf, anim_idx, node_idx, channel)
 
-            if channel.target.path in ['translation', 'rotation', 'scale']:
+    @staticmethod
+    def do_channel(gltf, anim_idx, node_idx, channel):
+        animation = gltf.data.animations[anim_idx]
+        vnode = gltf.vnodes[node_idx]
+        path = channel.target.path
 
-                if channel.target.path == "translation":
-                    blender_path = "location"
-                    for idx, key in enumerate(keys):
-                       obj.location = Vector(Conversion.loc_gltf_to_blender(list(values[idx])))
-                       obj.keyframe_insert(blender_path, frame = key[0] * fps, group='location')
+        action = BlenderNodeAnim.get_or_create_action(gltf, node_idx, animation.track_name)
 
-                    # Setting interpolation
-                    for fcurve in [curve for curve in obj.animation_data.action.fcurves if curve.group.name == "location"]:
-                        for kf in fcurve.keyframe_points:
-                            BlenderNodeAnim.set_interpolation(animation.samplers[channel.sampler].interpolation, kf)
+        keys = BinaryData.get_data_from_accessor(gltf, animation.samplers[channel.sampler].input)
+        values = BinaryData.get_data_from_accessor(gltf, animation.samplers[channel.sampler].output)
 
-                elif channel.target.path == "rotation":
-                    blender_path = "rotation_quaternion"
-                    for idx, key in enumerate(keys):
-                        obj.rotation_quaternion = Conversion.quaternion_gltf_to_blender(values[idx])
-                        obj.keyframe_insert(blender_path, frame = key[0] * fps, group='rotation')
+        if animation.samplers[channel.sampler].interpolation == "CUBICSPLINE":
+            # TODO manage tangent?
+            values = values[1::3]
 
-                    # Setting interpolation
-                    for fcurve in [curve for curve in obj.animation_data.action.fcurves if curve.group.name == "rotation"]:
-                        for kf in fcurve.keyframe_points:
-                            BlenderNodeAnim.set_interpolation(animation.samplers[channel.sampler].interpolation, kf)
+        # Convert the curve from glTF to Blender.
 
+        if path == "translation":
+            blender_path = "location"
+            group_name = "Location"
+            num_components = 3
+            values = [gltf.loc_gltf_to_blender(vals) for vals in values]
+            values = vnode.base_locs_to_final_locs(values)
 
-                elif channel.target.path == "scale":
-                    blender_path = "scale"
-                    for idx, key in enumerate(keys):
-                        obj.scale = Vector(Conversion.scale_gltf_to_blender(list(values[idx])))
-                        obj.keyframe_insert(blender_path, frame = key[0] * fps, group='scale')
+        elif path == "rotation":
+            blender_path = "rotation_quaternion"
+            group_name = "Rotation"
+            num_components = 4
+            values = [gltf.quaternion_gltf_to_blender(vals) for vals in values]
+            values = vnode.base_rots_to_final_rots(values)
 
-                    # Setting interpolation
-                    for fcurve in [curve for curve in obj.animation_data.action.fcurves if curve.group.name == "scale"]:
-                        for kf in fcurve.keyframe_points:
-                            BlenderNodeAnim.set_interpolation(animation.samplers[channel.sampler].interpolation, kf)
+        elif path == "scale":
+            blender_path = "scale"
+            group_name = "Scale"
+            num_components = 3
+            values = [gltf.scale_gltf_to_blender(vals) for vals in values]
+            values = vnode.base_scales_to_final_scales(values)
 
-            elif channel.target.path == 'weights':
+        # Objects parented to a bone are translated to the bone tip by default.
+        # Correct for this by translating backwards from the tip to the root.
+        if vnode.type == VNode.Object and path == "translation":
+            if vnode.parent is not None and gltf.vnodes[vnode.parent].type == VNode.Bone:
+                bone_length = gltf.vnodes[vnode.parent].bone_length
+                off = Vector((0, -bone_length, 0))
+                values = [vals + off for vals in values]
 
-                # retrieve number of targets
-                nb_targets = 0
-                for prim in gltf.data.meshes[gltf.data.nodes[node_idx].mesh].primitives:
-                    if prim.targets:
-                        if len(prim.targets) > nb_targets:
-                            nb_targets = len(prim.targets)
+        if vnode.type == VNode.Bone:
+            # Need to animate the pose bone when the node is a bone.
+            group_name = vnode.blender_bone_name
+            blender_path = 'pose.bones["%s"].%s' % (
+                bpy.utils.escape_identifier(vnode.blender_bone_name),
+                blender_path
+            )
 
-                for idx, key in enumerate(keys):
-                    for sk in range(nb_targets):
-                        obj.data.shape_keys.key_blocks[sk+1].value = values[idx*nb_targets+sk][0]
-                        obj.data.shape_keys.key_blocks[sk+1].keyframe_insert("value", frame=key[0] * fps, group='ShapeKeys')
+            # We have the final TRS of the bone in values. We need to give
+            # the TRS of the pose bone though, which is relative to the edit
+            # bone.
+            #
+            #     Final = EditBone * PoseBone
+            #   where
+            #     Final =    Trans[ft] Rot[fr] Scale[fs]
+            #     EditBone = Trans[et] Rot[er]
+            #     PoseBone = Trans[pt] Rot[pr] Scale[ps]
+            #
+            # Solving for PoseBone gives
+            #
+            #     pt = Rot[er^{-1}] (ft - et)
+            #     pr = er^{-1} fr
+            #     ps = fs
+
+            if path == 'translation':
+                edit_trans, edit_rot = vnode.editbone_trans, vnode.editbone_rot
+                edit_rot_inv = edit_rot.conjugated()
+                values = [
+                    edit_rot_inv @ (trans - edit_trans)
+                    for trans in values
+                ]
+
+            elif path == 'rotation':
+                edit_rot = vnode.editbone_rot
+                edit_rot_inv = edit_rot.conjugated()
+                values = [
+                    edit_rot_inv @ rot
+                    for rot in values
+                ]
+
+            elif path == 'scale':
+                pass  # no change needed
+
+        # To ensure rotations always take the shortest path, we flip
+        # adjacent antipodal quaternions.
+        if path == 'rotation':
+            for i in range(1, len(values)):
+                if values[i].dot(values[i-1]) < 0:
+                    values[i] = -values[i]
+
+        fps = bpy.context.scene.render.fps
+
+        coords = [0] * (2 * len(keys))
+        coords[::2] = (key[0] * fps for key in keys)
+
+        for i in range(0, num_components):
+            coords[1::2] = (vals[i] for vals in values)
+            make_fcurve(
+                action,
+                coords,
+                data_path=blender_path,
+                index=i,
+                group_name=group_name,
+                interpolation=animation.samplers[channel.sampler].interpolation,
+            )
+
+    @staticmethod
+    def get_or_create_action(gltf, node_idx, anim_name):
+        vnode = gltf.vnodes[node_idx]
+
+        if vnode.type == VNode.Bone:
+            # For bones, the action goes on the armature.
+            vnode = gltf.vnodes[vnode.bone_arma]
+
+        obj = vnode.blender_object
+
+        action = gltf.action_cache.get(obj.name)
+        if not action:
+            name = anim_name + "_" + obj.name
+            action = bpy.data.actions.new(name)
+            action.id_root = 'OBJECT'
+            gltf.needs_stash.append((obj, action))
+            gltf.action_cache[obj.name] = action
+
+        return action
