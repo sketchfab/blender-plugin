@@ -242,7 +242,7 @@ class Utils:
 
 class Cache:
     SKETCHFAB_CACHE_FILE = os.path.join(
-        bpy.utils.user_resource("SCRIPTS", "sketchfab_cache", create=True),
+        bpy.utils.user_resource("SCRIPTS", path="sketchfab_cache", create=True),
         ".cache"
     ) # Use a user path to avoid permission-related errors
 
