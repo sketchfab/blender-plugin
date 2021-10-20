@@ -1223,7 +1223,7 @@ class SketchfabBrowse(View3DPanel, bpy.types.Panel):
         #result_label = 'Click below to see more results'
         #col.label(text=result_label, icon='INFO')
         try:
-            col.template_icon_view(bpy.context.window_manager, 'result_previews', show_labels=True, scale=5.)
+            col.template_icon_view(bpy.context.window_manager, 'result_previews', show_labels=True, scale=8)
         except Exception:
             print('ResultsPanel: Failed to display results')
             pass
