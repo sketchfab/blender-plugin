@@ -20,7 +20,7 @@ To install the addon, just download the **sketchfab-x-y-z.zip** file attached to
 The addon should then be available in the 3D view:
 
 * Blender 2.79: under the tab 'Sketchfab' in the Tools panel (shortcut **T**).
-* Blender 2.80: under the tab 'Sketchfab' in the Properties panel (shortcut **N**).
+* Blender 2.80 to 3.1.0: under the tab 'Sketchfab' in the Properties panel (shortcut **N**).
 
 **⚠️ Note to Blender 2.79 OSX/Linux users:** The addon uses its own version of the SSL library. It is embedded within the plugin and should work correctly, but do not hesitate to [report an issue](#report-an-issue) if you encounter any issue related to SSL.
 
@@ -35,6 +35,11 @@ Your Sketchfab username should then be displayed upon successful login, and you 
 
 Please note that your login credentials are stored in a temporary file on your local machine (to automatically log you in when starting Blender). You can clear it by simply logging out of your Sketchfab account through the **Log Out** button.
 
+### Log in as a member of an Organization
+
+If you are a member of an organization, you can select the organization you belong to in the "Sketchfab for Teams" dropdown.
+
+Doing so will allow you to browse, import and export models from and to projects within your organization.
 
 ## Import a model from Sketchfab
 
