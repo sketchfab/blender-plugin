@@ -103,6 +103,15 @@ class Config:
 
     MAX_THUMBNAIL_HEIGHT = 512
 
+    SKETCHFAB_UPLOAD_LIMITS = {
+        "basic" : 100 * 1024 * 1024,
+        "plus": 100 * 1024 * 1024,
+        "pro": 200 * 1024 * 1024,
+        "prem": 200 * 1024 * 1024,
+        "biz": 500 * 1024 * 1024,
+        "ent": 500 * 1024 * 1024
+    }
+
 
 class Utils:
     def humanify_size(size):

@@ -1788,6 +1788,17 @@ class ExportSketchfab(bpy.types.Operator):
             self.report({'WARNING'}, "Error occured while preparing your file: %s" % str(e))
             return {'FINISHED'}
 
+        # Check the generated file size against the user plans, to know if the upload will succeed
+        upload_limit = Config.SKETCHFAB_UPLOAD_LIMITS[get_sketchfab_props().skfb_api.plan_type]
+        if get_sketchfab_props().skfb_api.use_org_profile:
+            upload_limit = Config.SKETCHFAB_UPLOAD_LIMITS["enterprise"]
+        print("plan limit %d, file size %d" % (upload_limit, size))
+        if size > upload_limit:
+            human_size_limit    = Utils.humanify_size(upload_limit)
+            human_exported_size = Utils.humanify_size(size)
+            self.report({'ERROR'}, "Upload size is above your plan upload limit: %s > %s" % (human_exported_size, human_size_limit))
+            return {'FINISHED'}
+
         sf_state.uploading = True
         sf_state.size_label = Utils.humanify_size(size)
         self._thread = threading.Thread(
