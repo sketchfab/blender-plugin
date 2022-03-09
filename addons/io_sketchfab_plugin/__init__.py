@@ -993,15 +993,16 @@ class ThumbnailCollector(threading.Thread):
 
 
 class LoginModal(bpy.types.Operator):
+    """Login into your account"""
     bl_idname = "wm.login_modal"
-    bl_label = "Import glTF model into Sketchfab"
+    bl_label = ""
     bl_options = {'INTERNAL'}
 
     is_logging : BoolProperty(default=False)
     error : BoolProperty(default=False)
     error_message : StringProperty(default='')
 
-    def exectue(self, context):
+    def execute(self, context):
         return {'FINISHED'}
 
     def handle_login(self, r, *args, **kwargs):
@@ -1052,6 +1053,7 @@ class LoginModal(bpy.types.Operator):
 
 
 class ImportModalOperator(bpy.types.Operator):
+    """Imports the selected model into Blender"""
     bl_idname = "wm.import_modal"
     bl_label = "Import glTF model into Sketchfab"
     bl_options = {'INTERNAL'}
@@ -1059,7 +1061,7 @@ class ImportModalOperator(bpy.types.Operator):
     gltf_path : StringProperty()
     uid : StringProperty()
 
-    def exectue(self, context):
+    def execute(self, context):
         print('IMPORT')
         return {'FINISHED'}
 
@@ -1347,6 +1349,7 @@ def draw_results_icons(results, props, nbcol=4):
 
 
 class SketchfabLogger(bpy.types.Operator):
+    """Log in / out your Sketchab.com account"""
     bl_idname = 'wm.sketchfab_login'
     bl_label = 'Sketchfab Login'
     bl_options = {'INTERNAL'}
@@ -1394,6 +1397,7 @@ class SketchfabModel:
 
 
 class SketchfabDownloadModel(bpy.types.Operator):
+    """Import the selected model"""
     bl_idname = "wm.sketchfab_download"
     bl_label = "Downloading"
     bl_options = {'INTERNAL'}
@@ -1407,6 +1411,7 @@ class SketchfabDownloadModel(bpy.types.Operator):
 
 
 class ViewOnSketchfab(bpy.types.Operator):
+    """Upload your model to Sketchfab"""
     bl_idname = "wm.sketchfab_view"
     bl_label = "View the model on Sketchfab"
     bl_options = {'INTERNAL'}
@@ -1428,6 +1433,9 @@ def clear_search():
 
 
 class SketchfabSearch(bpy.types.Operator):
+    """Send a search query to Sketchfab
+    Searches on the selected domain (all site, own models for PRO+ users, organization...)
+    and takes into accounts various search filters"""
     bl_idname = "wm.sketchfab_search"
     bl_label = "Search Sketchfab"
     bl_options = {'INTERNAL'}
@@ -1444,6 +1452,7 @@ class SketchfabSearch(bpy.types.Operator):
 
 
 class SketchfabSearchNextResults(bpy.types.Operator):
+    """Loads the next batch of 24 models from the search results"""
     bl_idname = "wm.sketchfab_search_next"
     bl_label = "Search Sketchfab"
     bl_options = {'INTERNAL'}
@@ -1457,6 +1466,7 @@ class SketchfabSearchNextResults(bpy.types.Operator):
 
 
 class SketchfabSearchPreviousResults(bpy.types.Operator):
+    """Loads the previous batch of 24 models from the search results"""
     bl_idname = "wm.sketchfab_search_prev"
     bl_label = "Search Sketchfab"
     bl_options = {'INTERNAL'}
@@ -1468,26 +1478,8 @@ class SketchfabSearchPreviousResults(bpy.types.Operator):
         skfb_api.search_cursor(skfb_api.prev_results_url, parse_results)
         return {'FINISHED'}
 
-
-class SketchfabOpenModel(bpy.types.Operator):
-    bl_idname = "wm.sketchfab_open"
-    bl_label = "Downloading"
-    bl_options = {'INTERNAL'}
-
-    def execute(self, context):
-        return {'FINISHED'}
-
-    def draw(self, context):
-        layout = self.layout
-        col = layout.column()
-        col.label(text="I'm downloading your model!")
-
-    def invoke(self, context, event):
-        wm = context.window_manager
-        return wm.invoke_popup(self, width=550)
-
-
 class SketchfabCreateAccount(bpy.types.Operator):
+    """Create an account on sketchfab.com"""
     bl_idname = "wm.sketchfab_signup"
     bl_label = "Sketchfab"
     bl_options = {'INTERNAL'}
@@ -1499,6 +1491,7 @@ class SketchfabCreateAccount(bpy.types.Operator):
 
 
 class SketchfabNewVersion(bpy.types.Operator):
+    """Opens addon latest available release on github"""
     bl_idname = "wm.skfb_new_version"
     bl_label = "Sketchfab"
     bl_options = {'INTERNAL'}
@@ -1510,6 +1503,7 @@ class SketchfabNewVersion(bpy.types.Operator):
 
 
 class SketchfabReportIssue(bpy.types.Operator):
+    """Open an issue on github tracker"""
     bl_idname = "wm.skfb_report_issue"
     bl_label = "Sketchfab"
     bl_options = {'INTERNAL'}
@@ -1521,6 +1515,7 @@ class SketchfabReportIssue(bpy.types.Operator):
 
 
 class SketchfabHelp(bpy.types.Operator):
+    """Opens the addon README on github"""
     bl_idname = "wm.skfb_help"
     bl_label = "Sketchfab"
     bl_options = {'INTERNAL'}
@@ -1557,6 +1552,7 @@ def activate_plugin():
 
 
 class SketchfabEnable(bpy.types.Operator):
+    """Activate the addon (checks login, cache folders...)"""
     bl_idname = "wm.skfb_enable"
     bl_label = "Sketchfab"
     bl_options = {'INTERNAL'}
