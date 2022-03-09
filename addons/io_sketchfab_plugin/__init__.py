@@ -1064,7 +1064,8 @@ class ImportModalOperator(bpy.types.Operator):
         return {'FINISHED'}
 
     def modal(self, context, event):
-        bpy.context.scene.render.engine = Version.ENGINE
+        if bpy.context.scene.render.engine not in ["CYCLES", "BLENDER_EEVEE"]:
+            bpy.context.scene.render.engine = Version.ENGINE
         gltf_importer = glTFImporter(self.gltf_path)
         gltf_importer.read()
 
