@@ -19,7 +19,7 @@ import bpy
 import json
 import shutil
 import tempfile
-
+from uuid import UUID
 
 class Config:
 
@@ -151,10 +151,8 @@ class Utils:
         else:
             return '{}/{}/download'.format(Config.SKETCHFAB_MODEL, uid)
 
-
     def thumbnail_file_exists(uid):
         return os.path.exists(os.path.join(Config.SKETCHFAB_THUMB_DIR, '{}.jpeg'.format(uid)))
-
 
     def clean_thumbnail_directory():
         if not os.path.exists(Config.SKETCHFAB_THUMB_DIR):
@@ -164,10 +162,8 @@ class Utils:
         for file in listdir(Config.SKETCHFAB_THUMB_DIR):
             os.remove(os.path.join(Config.SKETCHFAB_THUMB_DIR, file))
 
-
     def clean_downloaded_model_dir(uid):
         shutil.rmtree(os.path.join(Config.SKETCHFAB_MODEL_DIR, uid))
-
 
     def get_thumbnail_url(thumbnails_json):
         best_height = 0
@@ -178,7 +174,6 @@ class Utils:
                 best_thumbnail = image['url']
 
         return best_thumbnail
-
 
     def make_model_name(gltf_data):
         if 'title' in gltf_data.asset.extras:
@@ -194,7 +189,6 @@ class Utils:
         return thumbnail_url.split('/')[4]
 
     def get_uid_from_model_url(model_url, use_org_profile=False):
-        print("\nget_uid_from_model_url\n%s\n" % model_url)
         return model_url.split('/')[7] if use_org_profile else model_url.split('/')[5]
 
     def get_uid_from_download_url(model_url):
@@ -248,6 +242,13 @@ class Utils:
 
         # Select the root Empty node
         root.select_set(True)
+
+    def is_valid_uuid(uuid_to_test, version=4):
+        try:
+            uuid_obj = UUID(hex=uuid_to_test, version=version)
+            return True
+        except ValueError:
+            return False
 
 class Cache:
     SKETCHFAB_CACHE_FILE = os.path.join(
