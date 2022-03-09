@@ -191,11 +191,17 @@ class SketchfabApi:
         Cache.delete_key('key')
 
         props = get_sketchfab_props()
-        props.search_domain = "DEFAULT"
+        #props.search_domain = "DEFAULT"
         if 'current' in props.search_results:
             del props.search_results['current']
         pprops = get_sketchfab_props_proxy()
-        pprops.search_domain = "DEFAULT"
+        #pprops.search_domain = "DEFAULT"
+
+        self.user_orgs = []
+        self.active_org = None
+        self.use_org_profile = False
+        props.use_org_profile = False
+        pprops.use_org_profile = False
 
         bpy.ops.wm.sketchfab_search('EXEC_DEFAULT')
 
@@ -302,7 +308,7 @@ class SketchfabApi:
 
     def request_model_info(self, uid):
         url = Config.SKETCHFAB_MODEL + '/' + uid
-        if self.use_org_profile:
+        if self.use_org_profile and self.active_org.get("uid"):
             url = Config.SKETCHFAB_ORGS + "/" + self.active_org["uid"] + "/models/" + uid
 
         model_infothr = GetRequestThread(url, self.handle_model_info, self.headers)
@@ -509,7 +515,8 @@ def refresh_orgs(self, context):
     api   = props.skfb_api
 
     api.use_org_profile = pprops.use_org_profile
-    api.active_org      = [org for org in api.user_orgs if org["uid"] == pprops.active_org][0]
+    orgs = [org for org in api.user_orgs if org["uid"] == pprops.active_org]
+    api.active_org = orgs[0] if len(orgs) else None
 
     if pprops.use_org_profile != props.use_org_profile:
         props.use_org_profile = pprops.use_org_profile
