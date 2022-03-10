@@ -21,6 +21,7 @@ from ..com.gltf2_blender_extras import set_extras
 from .gltf2_blender_material import BlenderMaterial
 from ...io.com.gltf2_io_debug import print_console
 from .gltf2_io_draco_compression_extension import decode_primitive
+from ...io.imp.gltf2_io_user_extensions import import_user_extensions
 
 
 class BlenderMesh():
@@ -41,6 +42,9 @@ COLOR_MAX = 8
 
 def create_mesh(gltf, mesh_idx, skin_idx):
     pymesh = gltf.data.meshes[mesh_idx]
+
+    import_user_extensions('gather_import_mesh_before_hook', gltf, pymesh)
+
     name = pymesh.name or 'Mesh_%d' % mesh_idx
     mesh = bpy.data.meshes.new(name)
 
@@ -55,6 +59,8 @@ def create_mesh(gltf, mesh_idx, skin_idx):
     finally:
         if tmp_ob:
             bpy.data.objects.remove(tmp_ob)
+
+    import_user_extensions('gather_import_mesh_after_hook', gltf, pymesh, mesh)
 
     return mesh
 
@@ -73,8 +79,9 @@ def do_primitives(gltf, mesh_idx, skin_idx, mesh, ob):
         if 'POSITION' not in prim.attributes:
             continue
 
-        if 'NORMAL' in prim.attributes:
-            has_normals = True
+        if True: #gltf.import_settings['import_shading'] == "NORMALS":
+            if 'NORMAL' in prim.attributes:
+                has_normals = True
 
         if skin_idx is not None:
             i = 0
@@ -223,12 +230,14 @@ def do_primitives(gltf, mesh_idx, skin_idx, mesh, ob):
     # Accessors are cached in case they are shared between primitives; clear
     # the cache now that all prims are done.
     gltf.decode_accessor_cache = {}
-    vert_locs, vert_normals, vert_joints, vert_weights, \
-    sk_vert_locs, loop_vidxs, edge_vidxs = \
-        merge_duplicate_verts(
-            vert_locs, vert_normals, vert_joints, vert_weights, \
-            sk_vert_locs, loop_vidxs, edge_vidxs\
-        )
+
+    if True: #gltf.import_settings['merge_vertices']:
+        vert_locs, vert_normals, vert_joints, vert_weights, \
+        sk_vert_locs, loop_vidxs, edge_vidxs = \
+            merge_duplicate_verts(
+                vert_locs, vert_normals, vert_joints, vert_weights, \
+                sk_vert_locs, loop_vidxs, edge_vidxs\
+            )
 
     # ---------------
     # Convert all the arrays glTF -> Blender
@@ -300,9 +309,9 @@ def do_primitives(gltf, mesh_idx, skin_idx, mesh, ob):
     # TODO: this is slow :/
     if num_joint_sets:
         pyskin = gltf.data.skins[skin_idx]
-        for i, _ in enumerate(pyskin.joints):
-            # ob is a temp object, so don't worry about the name.
-            ob.vertex_groups.new(name='X%d' % i)
+        for i, node_idx in enumerate(pyskin.joints):
+            bone = gltf.vnodes[node_idx]
+            ob.vertex_groups.new(name=bone.blender_bone_name)
 
         vgs = list(ob.vertex_groups)
 
@@ -542,6 +551,8 @@ def normalize_vecs(vectors):
 
 def set_poly_smoothing(gltf, pymesh, mesh, vert_normals, loop_vidxs):
     num_polys = len(mesh.polygons)
+
+    # assert gltf.import_settings['import_shading'] == "NORMALS"
 
     # Try to guess which polys should be flat based on the fact that all the
     # loop normals for a flat poly are = the poly's normal.
