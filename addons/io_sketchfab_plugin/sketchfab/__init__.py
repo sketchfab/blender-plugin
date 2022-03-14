@@ -23,19 +23,6 @@ from uuid import UUID
 
 class Config:
 
-    # sometimes the path in preferences is empty
-    def get_temp_path():
-        if bpy.app.version == (2, 79, 0):
-            if bpy.context.user_preferences.filepaths.temporary_directory:
-                return bpy.context.user_preferences.filepaths.temporary_directory
-            else:
-                return tempfile.mkdtemp()
-        else:
-            if bpy.context.preferences.filepaths.temporary_directory:
-                return bpy.context.preferences.filepaths.temporary_directory
-            else:
-                return tempfile.mkdtemp()
-
     ADDON_NAME = 'io_sketchfab'
     GITHUB_REPOSITORY_URL = 'https://github.com/sketchfab/blender-plugin'
     GITHUB_REPOSITORY_API_URL = 'https://api.github.com/repos/sketchfab/blender-plugin'
@@ -60,10 +47,11 @@ class Config:
     PURCHASED_MODELS = SKETCHFAB_ME + "/models/purchases?"
 
     SKETCHFAB_PLUGIN_VERSION = '{}/releases'.format(GITHUB_REPOSITORY_API_URL)
-    # PATH management
-    SKETCHFAB_TEMP_DIR = os.path.join(get_temp_path(), 'sketchfab_downloads')
-    SKETCHFAB_THUMB_DIR = os.path.join(SKETCHFAB_TEMP_DIR, 'thumbnails')
-    SKETCHFAB_MODEL_DIR = os.path.join(SKETCHFAB_TEMP_DIR, 'imports')
+
+    # Those will be set during plugin initialization, or upon setting a new cache directory
+    SKETCHFAB_TEMP_DIR = ""
+    SKETCHFAB_THUMB_DIR = ""
+    SKETCHFAB_MODEL_DIR = ""
 
     SKETCHFAB_CATEGORIES = (('ALL', 'All categories', 'All categories'),
                             ('animals-pets', 'Animals & Pets', 'Animals and Pets'),

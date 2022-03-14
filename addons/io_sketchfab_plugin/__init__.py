@@ -23,6 +23,7 @@ from collections import OrderedDict
 import subprocess
 import tempfile
 import json
+import shutil
 
 import bpy
 import bpy.utils.previews
@@ -1927,8 +1928,61 @@ class ExportSketchfab(bpy.types.Operator):
         wm.event_timer_remove(self._timer)
         self._thread.join()
 
+def get_temporary_path():
+
+    # Get the preferences cache directory
+    cachePath = bpy.context.preferences.addons[__name__.split('.')[0]].preferences.cachePath
+
+    # The cachePath was set in the preferences
+    if cachePath:
+        return cachePath
+    else:
+        # Rely on Blender temporary directory
+        if bpy.app.version == (2, 79, 0):
+            if bpy.context.user_preferences.filepaths.temporary_directory:
+                return bpy.context.user_preferences.filepaths.temporary_directory
+            else:
+                return tempfile.mkdtemp()
+        else:
+            if bpy.context.preferences.filepaths.temporary_directory:
+                return bpy.context.preferences.filepaths.temporary_directory
+            else:
+                return tempfile.mkdtemp()
+
+def updateCacheDirectory(self, context):
+
+    # Get the cache path from the preferences, or a default temporary
+    path = os.path.abspath(get_temporary_path())
+
+    # Delete the old directory
+    # Won't delete anything upon plugin intialization, only when switching path in preferences
+    if Config.SKETCHFAB_TEMP_DIR and os.path.exists(Config.SKETCHFAB_TEMP_DIR) and os.path.isdir(Config.SKETCHFAB_TEMP_DIR):
+        shutil.rmtree(Config.SKETCHFAB_TEMP_DIR)
+
+    # Create the paths and directories for temporary directories
+    Config.SKETCHFAB_TEMP_DIR = os.path.join(path, "sketchfab_downloads")
+    Config.SKETCHFAB_THUMB_DIR = os.path.join(Config.SKETCHFAB_TEMP_DIR, 'thumbnails')
+    Config.SKETCHFAB_MODEL_DIR = os.path.join(Config.SKETCHFAB_TEMP_DIR, 'imports')
+    if not os.path.exists(Config.SKETCHFAB_TEMP_DIR): os.makedirs(Config.SKETCHFAB_TEMP_DIR)
+    if not os.path.exists(Config.SKETCHFAB_THUMB_DIR): os.makedirs(Config.SKETCHFAB_THUMB_DIR)
+    if not os.path.exists(Config.SKETCHFAB_MODEL_DIR): os.makedirs(Config.SKETCHFAB_MODEL_DIR)
+
+class SketchfabAddonPreferences(bpy.types.AddonPreferences):
+    bl_idname = __name__
+    cachePath: StringProperty(
+        name="Cache folder",
+        subtype='DIR_PATH',
+        update=updateCacheDirectory
+    )
+    def draw(self, context):
+        layout = self.layout
+        layout.label(text="GlTF archives downloaded from Sketchfab will be stored in this directory")
+        layout.label(text="Make sure you have write access it")
+        layout.prop(self, "cachePath")
 
 classes = (
+    SketchfabAddonPreferences,
+
     # Properties
     SketchfabBrowserProps,
     SketchfabLoginProps,
@@ -2004,6 +2058,9 @@ def register():
     bpy.types.WindowManager.sketchfab_export = PointerProperty(
                 type=SketchfabExportProps,
                 )
+
+    # If a cache path was set in preferences, use it
+    updateCacheDirectory(None, context=bpy.context)
 
 def unregister():
     for cls in classes:
