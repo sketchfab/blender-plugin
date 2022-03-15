@@ -8,69 +8,80 @@
 * [Export to Sketchfab](#export-a-model-to-sketchfab)
 * [Known issues](#known-issues)
 * [Report an issue](#report-an-issue)
-* [Addon development](#addon-development)
 
 *Based on [Blender glTF 2.0 Importer and Exporter](https://github.com/KhronosGroup/glTF-Blender-IO) from [Khronos Group](https://github.com/KhronosGroup)*
 
+<br>
 
 ## Installation
 
 To install the addon, just download the **sketchfab-x-y-z.zip** file attached to the [latest release](https://github.com/sketchfab/blender-plugin/releases/latest), and install it as a regular blender addon (User Preferences -> Addons -> Install from file).
 
-The addon should then be available in the 3D view:
+After installing the addon, two optional settings are available:
 
-* Blender 2.79: under the tab 'Sketchfab' in the Tools panel (shortcut **T**).
-* Blender 2.80 to 3.1.0: under the tab 'Sketchfab' in the Properties panel (shortcut **N**).
+* Download history: path to a .csv file used to keep track of your downloads and model licenses
+* Download directory: use this directory for temporary downloads (thumbnails and models). By default, OS specific temporary paths are used, but you can set this to a different directory if you encounter errors linked to write access.
 
-**⚠️ Note to Blender 2.79 OSX/Linux users:** The addon uses its own version of the SSL library. It is embedded within the plugin and should work correctly, but do not hesitate to [report an issue](#report-an-issue) if you encounter any issue related to SSL.
+<p align="center"><img style="max-width:100%" src="https://user-images.githubusercontent.com/52042414/158475442-3e6c90c3-983d-4d91-8f58-f8c3d20216dc.jpg"></p>
 
+**Note to Blender 2.79 OSX/Linux users:** The addon uses an embedded version of the SSL library. Do not hesitate to [report an issue](#report-an-issue) if you encounter any issue related to SSL.
+
+<br>
 
 ## Login
 
-The login process (mandatory to import or export models) should be straightforward: type in the email adress associated with your Sketchfab account as well as your password in the login form:
+After installation, the addon is available in the 3D view in the tab 'Sketchfab' in the Properties panel (shortcut **N**) for Blender 2.80 and after, and in the Tools panel (shortcut **T**) for Blender 2.79.
 
-![Screenshot from 2019-09-03 10-25-22](https://user-images.githubusercontent.com/52042414/64157665-66849980-ce37-11e9-9806-c74bb1476987.jpg)
+Login (mandatory to import or export models) can be achieved through using the email and password associated to your Sketchfab account, or by using your API token, available in the settings of your [Sketchfab account](https://sketchfab.com/settings/password):
+
+<p align="center"><img style="max-width:100%" src="https://user-images.githubusercontent.com/52042414/158475448-e229e9b3-309f-4701-bcf5-c134f6752ce5.jpg"></p>
 
 Your Sketchfab username should then be displayed upon successful login, and you will gain access to the full import and export capabilities of the addon. 
 
 Please note that your login credentials are stored in a temporary file on your local machine (to automatically log you in when starting Blender). You can clear it by simply logging out of your Sketchfab account through the **Log Out** button.
 
-### Log in as a member of an Organization
+### Organization members
 
-If you are a member of an organization, you can select the organization you belong to in the "Sketchfab for Teams" dropdown.
+If you are a member of a [Sketchfab organization](https://sketchfab.com/3d-asset-management), you will be able to select the organization you belong to in the "Sketchfab for Teams" dropdown. Doing so will allow you to browse, import and export models from and to specific projects within your organization.
 
-Doing so will allow you to browse, import and export models from and to projects within your organization.
+<br>
 
 ## Import a model from Sketchfab
 
 Once logged in, you should be able to easily import any downloadable model from Sketchfab. 
 
-To do so, just run a search query and adapt the search options in the **Filters** menu.
+<p align="center"><img style="max-width:100%" src="https://user-images.githubusercontent.com/52042414/158475452-3bce2d73-5e46-4ce9-a4fc-f6a6a7e1904c.jpg"></p>
 
-Note that **PRO** users can use the **My Models** checkbox to import any published model from their own library (even the private ones).
+To do so, run a search query and adapt the search options in the **Search filters** menu. The dropdown located above the search bar lets you specify the type of models you are browsing through:
 
-![results](https://user-images.githubusercontent.com/52042414/64158308-84063300-ce38-11e9-9d4d-1b17d0b0c828.jpg)
+* All site : downloadable models available under [Creative Commons licenses](https://help.sketchfab.com/hc/en-us/articles/201368589-Downloading-Models#licenses) on sketchfab.com
+* Own models: [PRO users](https://sketchfab.com/plans) can directly download models they have uploaded to their account
+* Store purchases: models you have purchased on the [Sketchfab Store](https://sketchfab.com/store)
+* Organization members can specify a specific project to browse
 
-Clicking the **Search Results** thumbnail will allow you to navigate through the models available for download, and selecting one model will allow you to inspect it before import.
+Clicking the **Search Results** thumbnail allows to navigate through the search results, and selecting a thumbnail gives you details before import:
 
-![license](https://user-images.githubusercontent.com/52042414/64158307-84063300-ce38-11e9-89dd-04c37859bb6b.jpg)
+<p align="center"><img style="max-width:100%" src="https://user-images.githubusercontent.com/52042414/158475456-0c6c1f68-10a4-4a35-997b-9b175e4accc7.jpg"></p>
 
-Please note that all downloadable models are licensed under specific licenses: make sure to follow the different [Creative Commons licensing schemes](https://help.sketchfab.com/hc/en-us/articles/201368589-Downloading-Models#licenses).
+If this fits your usecase better, you can also select the "Import from url" option to import a downloadable model through its full url, formatted as "http://sketchfab.com/3d-models/model-name-XXXX" or "https://sketchfab.com/orgs/OrgName/3d-models/model-name-XXXX" for organizations' models:
 
+<p align="center"><img style="max-width:100%" src="https://user-images.githubusercontent.com/52042414/158480653-568f6a91-bcd4-4009-b927-4d5ffc400658.png"></p>
+
+<br>
 
 ## Export a model to Sketchfab
 
-Exporting should also be straightforward.
-
-You can choose to either export the currently selected model(s) or all visible models, and can also choose to set some model properties, such as its title, description and tags.
+You can choose to either export the currently selected model(s) or all visible models, and set some model properties, such as its title, description and tags.
 
 You can also choose to keep the exported model as a draft (unchecking the checkbox will directly publish the model), but only **PRO** users can set their models as Private, and optionnaly protect them with a password.
 
-![export](https://user-images.githubusercontent.com/52042414/64161913-b61a9380-ce3e-11e9-89fa-7e15426cfff0.jpg)
+Finally, an option is given to [reupload a model](https://help.sketchfab.com/hc/en-us/articles/203064088-Reuploading-a-Model) by specifying the model's full url, formatted as "http://sketchfab.com/3d-models/model-name-XXXX" (or "https://sketchfab.com/orgs/OrgName/3d-models/model-name-XXXX" for organizations' models). Make sure to double check the model link you are reuploading to before proceeding.
+
+<p align="center"><img style="max-width:100%" src="https://user-images.githubusercontent.com/52042414/158475447-010d167e-42ae-4854-879f-137adda2fa61.jpg"></p>
 
 ### A note on material support
 
-Not all Blender materials and shaders will get correctly exported to Sketchfab.
+Not all Blender materials and shaders will get correctly exported to Sketchfab. As a rule of thumb, avoid complex node graphs and don't use "transformative" nodes (Gradient, ColorRamp, Multiply, MixShader...) to improve the chances of your material being correctly parsed on Sketchfab.
 
 The best material support comes with the **Principled BSDF** node, having either parameters or image textures plugged into the following channels:
 
@@ -81,11 +92,11 @@ The best material support comes with the **Principled BSDF** node, having either
 * Alpha
 * Emission
 
-Note that the export does not support UVs transformation (through the Mapping node), and that Opacity and Backface Culling parameters should be set in the **Options** tab of the material's Properties panel in order to be directly activated in Sketchfab's 3D settings. 
+Note that Opacity and Backface Culling parameters should be set in the **Options** tab of the material's Properties panel in order to be directly activated in Sketchfab's 3D settings. 
 
 Here is an example of a compatible node graph with backface culling and alpha mode correctly set (Blender 2.80 - Eevee renderer):
 
-![graph](https://user-images.githubusercontent.com/52042414/64164529-b4070380-ce43-11e9-8602-995b083ac722.jpg)
+<p align="center"><img style="max-width:100%" src="https://user-images.githubusercontent.com/52042414/64164529-b4070380-ce43-11e9-8602-995b083ac722.jpg"></p>
 
 
 ## Known Issues
@@ -104,36 +115,15 @@ Here is a list of known issues on import, as well as some possible fixes.
 
 Please note that the materials are being converted from Sketchfab to Cycles in Blender 2.79, and Eevee in Blender 2.80. If a material looks wrong, using the **Node editor** could therefore help you fixing possible issues.
 
+#### Mesh not parented to armature
+
+Until Blender 3.0, rigged meshes did not get parented correctly to their respective armatures, resulting in non-rigged models. This behaviour is fixed by using the plugin with a version of Blender after 3.0.
+
 #### Empty scene after import
 
-Scale can vary a lot between different models, and models origins are not always intuitively centered. 
+Scale can vary a lot between different models, and models origins are not always correctly centered. As imported models are be selected after import, you can try to scale them in order to make them visible (most often, the model will need to be scaled down).
 
-The imported models will always be selected after import, and you can try to scale them in order to make them visible (most often, the model will need to be scaled down).
-
-If it's not enough, try to select a mesh in the Outliner view and use numpad '.' (**View to selected** operator) to center the view on it.
-
-#### Transparency
-
-Some models are using refraction on Sketchfab (for glass, ice, water...), which is not supported by glTF and ends up being converted to regular transparency.
-
-In Blender **Node Editor**, refraction can be achieved by tweaking the **IOR** and **Transmission** inputs of the Principled BSDF node, or by mixing a **Refraction BSDF** shader with the original material.
-
-#### Weird seams or normals
-
-Tangent space import is not working yet so you might experience rendering issue on some models with normal maps.
-
-#### Single color model (wrong backface culling)
-
-Backface culling is not well supported on import yet.
-
-It is often used on Sketchfab to create models with outlines (as on [this model](https://sketchfab.com/models/71436ab009684265a2fda0e469f77752) for instance) by duplicating the object, scaling it up, flipping its normals and making the material single sided. 
-
-You can reproduce this behaviour in Blender:
-
-* Blender 2.79: 
-	* For the 3D view (not rendered), check the **Backface culling** checkbox in the **Properties Panel** (shortcut **N**), under the **Shading** dropdown.
-	* For the rendered view (in Cycles), follow the instructions on [this StackOverflow answer](https://blender.stackexchange.com/a/2083).
-* Blender 2.80: In the node editor **Properties Panel**, under the **Options** tab and **Settings** dropdown, make sure to have the **Backface Culling** option toggled on.
+If it's not enough, try to select a mesh in the Outliner view and use numpad '.' (**View to selected** operator) to center the view on it. Modifying the range of the clip ("Clip start" and "Clip end") in the "View" tab of the Tools panel can also help for models with high scale.
 
 #### Unexpected colors (vertex colors)
 
@@ -166,22 +156,3 @@ To help us track a possible error, please try to append the logs of Blender's co
  
 * On Windows, it is available through the menu **Window** -> **Toggle system console**
 * On OSX or Linux systems, you can access this data by [starting Blender from the command line](https://docs.blender.org/manual/en/dev/render/workflows/command_line.html). Outputs will then be printed in the shell from which you launched Blender.
-
-## Addon development
-
-To prepare a development version of the addon, you'll first have to clone this repository and update the [Khronos glTF IO](https://github.com/KhronosGroup/glTF-Blender-IO) submodule:
-```sh
-git clone https://github.com/sketchfab/blender-plugin.git
-cd blender-plugin/
-git submodule update --init --recursive
-```
-
-You'll then need (only once) to patch the code from the Khronos submodule with the command:
-```sh
-./build.sh --patch
-```
-
-The final releases can then be built by executing build.sh without arguments:
-```
-./build.sh
-```
