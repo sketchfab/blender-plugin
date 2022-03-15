@@ -883,7 +883,6 @@ class SketchfabBrowserPropsProxy(bpy.types.PropertyGroup):
             name="Sort by",
             items=get_sorting_options,
             description="Sort ",
-            default=0,
             update=refresh_search,
             )
 
@@ -905,7 +904,6 @@ class SketchfabBrowserPropsProxy(bpy.types.PropertyGroup):
             name="",
             items=get_available_search_domains,
             description="Search domain ",
-            default=0,
             update=refresh_search
             )
 
@@ -962,7 +960,6 @@ class SketchfabBrowserProps(bpy.types.PropertyGroup):
             name="Sort by",
             items=get_sorting_options,
             description="Sort ",
-            default=0,
             update=refresh_search,
             )
 
@@ -982,7 +979,6 @@ class SketchfabBrowserProps(bpy.types.PropertyGroup):
             name="Search domain",
             items=get_available_search_domains,
             description="Search domain ",
-            default=0,
             update=refresh_search
             )
 
