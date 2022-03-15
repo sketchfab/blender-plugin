@@ -93,6 +93,7 @@ bl_info['blender'] = getattr(bpy.app, "version")
 PLUGIN_VERSION = str(bl_info['version']).strip('() ').replace(',', '.')
 preview_collection = {}
 thumbnailsProgress = set([])
+ongoingSearches = set([])
 is_plugin_enabled = False
 
 
@@ -117,9 +118,9 @@ class Config:
     DEFAULT_SEARCH = SKETCHFAB_SEARCH + \
                      '?type=models&downloadable=true' + DEFAULT_FLAGS
 
-    SKETCHFAB_ME = '{}/v3/me'.format(SKETCHFAB_URL)
+    SKETCHFAB_ME = '{}/v3/me'.format(SKETCHFAB_API)
     BASE_SEARCH_OWN_MODELS = SKETCHFAB_ME + '/search?type=models&downloadable=true'
-    PURCHASED_MODELS = SKETCHFAB_ME + "/models/purchases?"
+    PURCHASED_MODELS = SKETCHFAB_ME + "/models/purchases?type=models"
 
     SKETCHFAB_PLUGIN_VERSION = '{}/releases'.format(GITHUB_REPOSITORY_API_URL)
 
@@ -259,7 +260,11 @@ class Utils:
         return thumbnail_url.split('/')[4]
 
     def get_uid_from_model_url(model_url, use_org_profile=False):
-        return model_url.split('/')[7] if use_org_profile else model_url.split('/')[5]
+        try:
+            return model_url.split('/')[7] if use_org_profile else model_url.split('/')[5]
+        except:
+            print("Error getting uid from url: {}".format(model_url))
+            return None
 
     def get_uid_from_download_url(model_url):
         return model_url.split('/')[6]
@@ -588,7 +593,7 @@ class SketchfabApi:
         uid = Utils.get_uid_from_model_url(r.url, self.use_org_profile)
 
         # Dirty fix to avoid processing obsolete result data
-        if 'current' not in skfb.search_results or uid not in skfb.search_results['current']:
+        if 'current' not in skfb.search_results or uid is None or uid not in skfb.search_results['current']:
             return
 
         model = skfb.search_results['current'][uid]
@@ -602,9 +607,8 @@ class SketchfabApi:
 
     def search(self, query, search_cb):
         skfb = get_sketchfab_props()
-        if skfb.search_domain == "DEFAULT":
-            url = Config.BASE_SEARCH
-        elif skfb.search_domain == "OWN":
+        url = Config.BASE_SEARCH
+        if skfb.search_domain == "OWN":
             url = Config.BASE_SEARCH_OWN_MODELS
         elif skfb.search_domain == "STORE":
             url = Config.PURCHASED_MODELS
@@ -614,9 +618,10 @@ class SketchfabApi:
             url = Config.SKETCHFAB_ORGS + "/%s/models?isArchivesReady=true&projects=%s" % (self.active_org["uid"], skfb.search_domain)
 
         search_query = '{}{}'.format(url, query)
-
-        searchthr = GetRequestThread(search_query, search_cb, self.headers)
-        searchthr.start()
+        if search_query not in ongoingSearches:
+            ongoingSearches.add(search_query)
+            searchthr = GetRequestThread(search_query, search_cb, self.headers)
+            searchthr.start()
 
     def search_cursor(self, url, search_cb):
         requests.get(url, headers=self.headers, hooks={'response': search_cb})
@@ -704,6 +709,8 @@ class SketchfabApi:
 
         skfb = get_sketchfab_props()
         uid = Utils.get_uid_from_model_url(r.url, self.use_org_profile)
+        if uid is None:
+            return
 
         gltf = r.json()['gltf']
         skfb_model = get_sketchfab_model(uid)
@@ -787,7 +794,6 @@ class SketchfabLoginProps(bpy.types.PropertyGroup):
             name="Use mail / password",
             description="Use mail/password login or API Token",
             default=True,
-            #update=refresh_search,
     )
 
     password : StringProperty(
@@ -860,6 +866,13 @@ def refresh_orgs(self, context):
     if pprops.active_org != props.active_org:
         props.active_org = pprops.active_org
 
+    if props.use_org_profile:
+        props.search_domain = "ACTIVE_ORG"
+        pprops.search_domain = "ACTIVE_ORG"
+    else:
+        props.search_domain = "DEFAULT"
+        pprops.search_domain = "DEFAULT"
+
     refresh_search(self, context)
 
 def get_sorting_options(self, context):
@@ -929,7 +942,8 @@ class SketchfabBrowserPropsProxy(bpy.types.PropertyGroup):
             name="",
             items=get_available_search_domains,
             description="Search domain ",
-            update=refresh_search
+            update=refresh_search,
+            default=None
             )
 
     use_org_profile : BoolProperty(
@@ -985,7 +999,6 @@ class SketchfabBrowserProps(bpy.types.PropertyGroup):
             name="Sort by",
             items=get_sorting_options,
             description="Sort ",
-            update=refresh_search,
             )
 
     animated : BoolProperty(
@@ -1004,21 +1017,18 @@ class SketchfabBrowserProps(bpy.types.PropertyGroup):
             name="Search domain",
             items=get_available_search_domains,
             description="Search domain ",
-            update=refresh_search
             )
 
     use_org_profile : BoolProperty(
         name="Use organisation profile",
         description="Import/Export as a member of an organization\nLOL",
         default=False,
-        update=refresh_orgs
     )
 
     active_org : EnumProperty(
         name="Org",
         items=get_user_orgs,
         description="Active org",
-        update=refresh_orgs
     )
 
     status : StringProperty(name='status', default='idle')
@@ -1180,7 +1190,7 @@ def import_model(gltf_path, uid):
 
 
 def build_search_request(query, pbr, animated, staffpick, face_count, category, sort_by):
-    final_query = '&q={}'.format(query)
+    final_query = '&q={}'.format(query) if query else ''
 
     if animated:
         final_query = final_query + '&animated=true'
@@ -1216,6 +1226,9 @@ def build_search_request(query, pbr, animated, staffpick, face_count, category, 
 
 
 def parse_results(r, *args, **kwargs):
+
+    ongoingSearches.discard(r.url)
+
     skfb = get_sketchfab_props()
     json_data = r.json()
 
