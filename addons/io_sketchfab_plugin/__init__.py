@@ -358,6 +358,42 @@ class SketchfabApi:
     def search_cursor(self, url, search_cb):
         requests.get(url, headers=self.headers, hooks={'response': search_cb})
 
+    def write_model_info(self, title, author, authorUrl, license, uid):
+        try:
+            downloadHistory = bpy.context.preferences.addons[__name__.split('.')[0]].preferences.downloadHistory
+            if downloadHistory != "":
+                downloadHistory = os.path.abspath(downloadHistory)
+                createFile = False
+                if not os.path.exists(downloadHistory):
+                    createFile = True
+                with open(downloadHistory, 'a+') as f:
+                    if createFile:
+                        f.write("Model name, Author name, Author url, License, Model link,\n")
+                    f.write("{}, {}, https://sketchfab.com/{}, {}, https://sketchfab.com/models/{},\n".format(
+                        title.replace(",", " "),
+                        author.replace(",", " "),
+                        authorUrl.replace(",", " "),
+                        license.replace(",", " "),
+                        uid
+                    ))
+        except:
+            print("Error encountered while saving data to history file")
+
+    def parse_model_info_request(self, r, *args, **kargs):
+        try:
+            if r.status_code == 200:
+                result = r.json()
+                title = result['name']
+                author = result['user']['displayName']
+                username = result['user']['username']
+                license = result["license"]["label"]
+                uid = result['uid']
+                self.write_model_info(title, author, username, license, uid)
+            else:
+                print("Error encountered while getting model info ({})\n{}\n{}".format(r.status_code, r.url, str(r.json())))
+        except:
+            print("Error encountered while parsing model info request: {}".format(r.url))
+
     def download_model(self, uid):
         skfb_model = get_sketchfab_model(uid)
         if skfb_model is not None: # The model comes from the search results
@@ -368,6 +404,7 @@ class SketchfabApi:
                 skfb_model.download_url = None
                 skfb_model.url_expires = None
                 skfb_model.time_url_requested = None
+                self.write_model_info(skfb_model.title, skfb_model.author, skfb_model.username, skfb_model.license, uid)
                 requests.get(Utils.build_download_url(uid, self.use_org_profile, self.active_org), headers=self.headers, hooks={'response': self.handle_download})
         else: # Model comes from a direct link
             skfb = get_sketchfab_props()
@@ -391,11 +428,11 @@ class SketchfabApi:
                 except:
                     print("Cannot parse the org name from the url %s" % skfb.manualImportPath)
                     return
-            # Otherwise, request a direct download
+            # Otherwise, request a direct download and get model info
             else:
                 download_url = Utils.build_download_url(uid)
+                requests.get('{}/{}'.format(Config.SKETCHFAB_MODEL, uid), headers=skfb.skfb_api.headers, hooks={'response': self.parse_model_info_request})
 
-            print("Sketchfab_model is none (direct url maybe ?)\nDownload url: %s" % download_url)
             requests.get(download_url, headers=self.headers, hooks={'response': self.handle_download})
 
     def handle_download(self, r, *args, **kwargs):
@@ -1421,6 +1458,7 @@ class SketchfabModel:
     def __init__(self, json_data):
         self.title = str(json_data['name'])
         self.author = json_data['user']['displayName']
+        self.username = json_data['user']['username']
         self.uid = json_data['uid']
         self.vertex_count = json_data['vertexCount']
         self.face_count = json_data['faceCount']
@@ -1971,14 +2009,27 @@ class SketchfabAddonPreferences(bpy.types.AddonPreferences):
     bl_idname = __name__
     cachePath: StringProperty(
         name="Cache folder",
+        description=(
+            "Temporary directory for downloads from sketchfab.com\n"
+            "Set by the OS by default, make sure to have write access\n"
+            "to this directory if you set it manually"
+        ),
         subtype='DIR_PATH',
         update=updateCacheDirectory
     )
+    downloadHistory : StringProperty(
+        name="Download history file",
+        description=(
+            ".csv file containing your downloads from sketchfab.com\n"
+            "If valid, the name, license and url of every model you\n"
+            "download through the plugin will be saved in this file"
+        ),
+        subtype='FILE_PATH'
+    )
     def draw(self, context):
         layout = self.layout
-        layout.label(text="GlTF archives downloaded from Sketchfab will be stored in this directory")
-        layout.label(text="Make sure you have write access it")
-        layout.prop(self, "cachePath")
+        layout.prop(self, "cachePath", text="Download directory")
+        layout.prop(self, "downloadHistory", text="Download history (.csv)")
 
 classes = (
     SketchfabAddonPreferences,
