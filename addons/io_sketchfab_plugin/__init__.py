@@ -92,6 +92,7 @@ bl_info['blender'] = getattr(bpy.app, "version")
 
 PLUGIN_VERSION = str(bl_info['version']).strip('() ').replace(',', '.')
 preview_collection = {}
+thumbnailsProgress = set([])
 is_plugin_enabled = False
 
 
@@ -163,7 +164,7 @@ class Config:
                                ('OWN', "Own Models (PRO)", "", 1),
                                ('STORE', "Store purchases", "", 2))
 
-    MAX_THUMBNAIL_HEIGHT = 512
+    MAX_THUMBNAIL_HEIGHT = 256
 
     SKETCHFAB_UPLOAD_LIMITS = {
         "basic" : 100 * 1024 * 1024,
@@ -227,13 +228,21 @@ class Utils:
         shutil.rmtree(os.path.join(Config.SKETCHFAB_MODEL_DIR, uid))
 
     def get_thumbnail_url(thumbnails_json):
+        min_height  = 1e6
+        min_thumbnail = None
         best_height = 0
         best_thumbnail = None
         for image in thumbnails_json['images']:
-            if image['height'] <= Config.MAX_THUMBNAIL_HEIGHT and image['height'] > best_height:
-                best_height = image['height']
+            h = image['height']
+            if h <= Config.MAX_THUMBNAIL_HEIGHT and h > best_height:
+                best_height = h
                 best_thumbnail = image['url']
-
+            elif h < min_height:
+                min_height = h
+                min_thumbnail = image['url']
+        # Ensure we have a thumbnail if available thumbnails are all above MAX_THUMBNAIL_HEIGHT
+        if best_thumbnail is None and min_thumbnail is not None:
+            return min_thumbnail
         return best_thumbnail
 
     def make_model_name(gltf_data):
@@ -556,10 +565,13 @@ class SketchfabApi:
             else:
                 print('Login failed.\n {}'.format(r.json()))
 
-    def request_thumbnail(self, thumbnails_json):
-        url = Utils.get_thumbnail_url(thumbnails_json)
-        thread = ThumbnailCollector(url)
-        thread.start()
+    def request_thumbnail(self, thumbnails_json, model_uid):
+        # Avoid requesting twice the same data
+        if model_uid not in thumbnailsProgress:
+            thumbnailsProgress.add(model_uid)
+            url = Utils.get_thumbnail_url(thumbnails_json)
+            thread = ThumbnailCollector(url)
+            thread.start()
 
     def request_model_info(self, uid, callback=None):
         callback = self.handle_model_info if callback is None else callback
@@ -1210,7 +1222,7 @@ def parse_results(r, *args, **kwargs):
         skfb.search_results['current'][result['uid']] = SketchfabModel(result)
 
         if not os.path.exists(os.path.join(Config.SKETCHFAB_THUMB_DIR, uid) + '.jpeg'):
-            skfb.skfb_api.request_thumbnail(result['thumbnails'])
+            skfb.skfb_api.request_thumbnail(result['thumbnails'], uid)
         elif uid not in skfb.custom_icons:
             skfb.custom_icons.load(uid, os.path.join(Config.SKETCHFAB_THUMB_DIR, "{}.jpeg".format(uid)), 'IMAGE')
 
@@ -1271,6 +1283,8 @@ class ThumbnailCollector(threading.Thread):
                 for data in r.iter_content(chunk_size=4096):
                     dl += len(data)
                     f.write(data)
+
+        thumbnailsProgress.discard(uid)
 
         props = get_sketchfab_props()
         if uid not in props.custom_icons:
