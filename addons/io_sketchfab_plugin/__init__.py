@@ -263,7 +263,7 @@ class Utils:
         try:
             return model_url.split('/')[7] if use_org_profile else model_url.split('/')[5]
         except:
-            print("Error getting uid from url: {}".format(model_url))
+            ShowMessage("ERROR", "Url parsing error", "Error getting uid from url: {}".format(model_url))
             return None
 
     def get_uid_from_download_url(model_url):
@@ -439,7 +439,6 @@ class SketchfabApi:
 
     def build_headers(self):
         if self.access_token:
-            print("Setting headers to OAuth access token")
             self.headers = {'Authorization': 'Bearer ' + self.access_token}
         elif self.api_token:
             self.headers = {'Authorization': 'Token ' + self.api_token}
@@ -502,6 +501,7 @@ class SketchfabApi:
         else:
             print('\nInvalid access or API token\nYou can get your API token here:\nhttps://sketchfab.com/settings/password\n')
             set_login_status('ERROR', 'Failed to authenticate')
+            ShowMessage("ERROR", "Failed to authenticate", "Invalid access or API token")
             self.access_token = ''
             self.api_token = ''
             self.headers = {}
@@ -690,10 +690,10 @@ class SketchfabApi:
                     if orgUid:
                         download_url = '{}/{}/models/{}/download'.format(Config.SKETCHFAB_ORGS, orgUid, uid)
                     else:
-                        print("User does not appear to belong to org %s" % (orgName))
+                        ShowMessage("ERROR", "User not in Organization", "User does not appear to belong to org %s" % (orgName))
                         return
                 except:
-                    print("Cannot parse the org name from the url %s" % skfb.manualImportPath)
+                    ShowMessage("ERROR", "Invalid url", "Cannot parse org name from url %s" % skfb.manualImportPath)
                     return
             # Otherwise, request a direct download and get model info
             else:
@@ -704,7 +704,7 @@ class SketchfabApi:
 
     def handle_download(self, r, *args, **kwargs):
         if r.status_code != 200 or 'gltf' not in r.json():
-            print('Download not available for this model')
+            ShowMessage("ERROR", "This model is not downloadable", "Make sure your account has enough rights to download the model")
             return
 
         skfb = get_sketchfab_props()
@@ -762,7 +762,7 @@ class SketchfabApi:
                 import traceback
                 print(traceback.format_exc())
         else:
-            print("Failed to download model (url might be invalid)")
+            ShowMessage("ERROR", "Download error", "Failed to download model (url might be invalid)")
             model = get_sketchfab_model(uid)
             set_import_status("Import model ({})".format(model.download_size if model.download_size else 'fetching data'))
         return
@@ -1784,6 +1784,12 @@ class SketchfabModel:
         self.time_url_requested = None
         self.url_expires = None
 
+def ShowMessage(icon = "INFO", title = "Info", message = "Information"):
+    def draw(self, context):
+        self.layout.label(text=message)
+    print("\n{}: {}".format(icon, message))
+    bpy.context.window_manager.popup_menu(draw, title = title, icon = icon)
+
 
 class SketchfabDownloadModel(bpy.types.Operator):
     """Import the selected model"""
@@ -2250,7 +2256,6 @@ class ExportSketchfab(bpy.types.Operator):
         upload_limit = Config.SKETCHFAB_UPLOAD_LIMITS[get_sketchfab_props().skfb_api.plan_type]
         if get_sketchfab_props().skfb_api.use_org_profile:
             upload_limit = Config.SKETCHFAB_UPLOAD_LIMITS["enterprise"]
-        print("plan limit %d, file size %d" % (upload_limit, size))
         if size > upload_limit:
             human_size_limit    = Utils.humanify_size(upload_limit)
             human_exported_size = Utils.humanify_size(size)
