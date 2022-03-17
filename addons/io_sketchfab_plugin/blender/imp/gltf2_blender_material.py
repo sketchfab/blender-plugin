@@ -18,6 +18,7 @@ from ..com.gltf2_blender_extras import set_extras
 from .gltf2_blender_pbrMetallicRoughness import MaterialHelper, pbr_metallic_roughness
 from .gltf2_blender_KHR_materials_pbrSpecularGlossiness import pbr_specular_glossiness
 from .gltf2_blender_KHR_materials_unlit import unlit
+from ...io.imp.gltf2_io_user_extensions import import_user_extensions
 
 
 class BlenderMaterial():
@@ -29,6 +30,8 @@ class BlenderMaterial():
     def create(gltf, material_idx, vertex_color):
         """Material creation."""
         pymaterial = gltf.data.materials[material_idx]
+
+        import_user_extensions('gather_import_material_before_hook', gltf, pymaterial, vertex_color)
 
         name = pymaterial.name
         if name is None:
@@ -56,10 +59,11 @@ class BlenderMaterial():
         else:
             pbr_metallic_roughness(mh)
 
+        import_user_extensions('gather_import_material_after_hook', gltf, pymaterial, vertex_color, mat)
+
     @staticmethod
     def set_double_sided(pymaterial, mat):
         mat.use_backface_culling = (pymaterial.double_sided != True)
-        mat.show_transparent_back = False
 
     @staticmethod
     def set_alpha_mode(pymaterial, mat):

@@ -1,5 +1,5 @@
 """
-Copyright 2021 Sketchfab
+Copyright 2022 Sketchfab
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -23,6 +23,8 @@ from collections import OrderedDict
 import subprocess
 import tempfile
 import json
+import shutil
+from uuid import UUID
 
 import bpy
 import bpy.utils.previews
@@ -33,10 +35,8 @@ from bpy.props import (StringProperty,
                        PointerProperty)
 
 from .io import *
-from .sketchfab import Config, Utils, Cache
 from .io.imp.gltf2_io_gltf import *
 from .blender.imp.gltf2_blender_gltf import *
-
 from .blender.blender_version import Version
 
 
@@ -77,7 +77,7 @@ bl_info = {
     'author': 'Sketchfab',
     'license': 'APACHE2',
     'deps': '',
-    'version': (1, 4, 1),
+    'version': (1, 5, 0),
     "blender": (2, 80, 0),
     'location': 'View3D > Tools > Sketchfab',
     'warning': '',
@@ -92,7 +92,272 @@ bl_info['blender'] = getattr(bpy.app, "version")
 
 PLUGIN_VERSION = str(bl_info['version']).strip('() ').replace(',', '.')
 preview_collection = {}
+thumbnailsProgress = set([])
+ongoingSearches = set([])
 is_plugin_enabled = False
+
+
+class Config:
+
+    ADDON_NAME = 'io_sketchfab'
+    GITHUB_REPOSITORY_URL = 'https://github.com/sketchfab/blender-plugin'
+    GITHUB_REPOSITORY_API_URL = 'https://api.github.com/repos/sketchfab/blender-plugin'
+    SKETCHFAB_REPORT_URL = 'https://help.sketchfab.com/hc/en-us/requests/new?type=exporters&subject=Blender+Plugin'
+
+    SKETCHFAB_URL = 'https://sketchfab.com'
+    DUMMY_CLIENTID = 'hGC7unF4BHyEB0s7Orz5E1mBd3LluEG0ILBiZvF9'
+    SKETCHFAB_OAUTH = SKETCHFAB_URL + '/oauth2/token/?grant_type=password&client_id=' + DUMMY_CLIENTID
+    SKETCHFAB_API = 'https://api.sketchfab.com'
+    SKETCHFAB_SEARCH = SKETCHFAB_API + '/v3/search'
+    SKETCHFAB_MODEL = SKETCHFAB_API + '/v3/models'
+    SKETCHFAB_ORGS = SKETCHFAB_API + '/v3/orgs'
+    SKETCHFAB_SIGNUP = 'https://sketchfab.com/signup'
+
+    BASE_SEARCH = SKETCHFAB_SEARCH + '?type=models&downloadable=true'
+    DEFAULT_FLAGS = '&staffpicked=true&sort_by=-staffpickedAt'
+    DEFAULT_SEARCH = SKETCHFAB_SEARCH + \
+                     '?type=models&downloadable=true' + DEFAULT_FLAGS
+
+    SKETCHFAB_ME = '{}/v3/me'.format(SKETCHFAB_API)
+    BASE_SEARCH_OWN_MODELS = SKETCHFAB_ME + '/search?type=models&downloadable=true'
+    PURCHASED_MODELS = SKETCHFAB_ME + "/models/purchases?type=models"
+
+    SKETCHFAB_PLUGIN_VERSION = '{}/releases'.format(GITHUB_REPOSITORY_API_URL)
+
+    # Those will be set during plugin initialization, or upon setting a new cache directory
+    SKETCHFAB_TEMP_DIR = ""
+    SKETCHFAB_THUMB_DIR = ""
+    SKETCHFAB_MODEL_DIR = ""
+
+    SKETCHFAB_CATEGORIES = (('ALL', 'All categories', 'All categories'),
+                            ('animals-pets', 'Animals & Pets', 'Animals and Pets'),
+                            ('architecture', 'Architecture', 'Architecture'),
+                            ('art-abstract', 'Art & Abstract', 'Art & Abstract'),
+                            ('cars-vehicles', 'Cars & vehicles', 'Cars & vehicles'),
+                            ('characters-creatures', 'Characters & Creatures', 'Characters & Creatures'),
+                            ('cultural-heritage-history', 'Cultural Heritage & History', 'Cultural Heritage & History'),
+                            ('electronics-gadgets', 'Electronics & Gadgets', 'Electronics & Gadgets'),
+                            ('fashion-style', 'Fashion & Style', 'Fashion & Style'),
+                            ('food-drink', 'Food & Drink', 'Food & Drink'),
+                            ('furniture-home', 'Furniture & Home', 'Furniture & Home'),
+                            ('music', 'Music', 'Music'),
+                            ('nature-plants', 'Nature & Plants', 'Nature & Plants'),
+                            ('news-politics', 'News & Politics', 'News & Politics'),
+                            ('people', 'People', 'People'),
+                            ('places-travel', 'Places & Travel', 'Places & Travel'),
+                            ('science-technology', 'Science & Technology', 'Science & Technology'),
+                            ('sports-fitness', 'Sports & Fitness', 'Sports & Fitness'),
+                            ('weapons-military', 'Weapons & Military', 'Weapons & Military'))
+
+    SKETCHFAB_FACECOUNT = (('ANY', "All", ""),
+                           ('10K', "Up to 10k", ""),
+                           ('50K', "10k to 50k", ""),
+                           ('100K', "50k to 100k", ""),
+                           ('250K', "100k to 250k", ""),
+                           ('250KP', "250k +", ""))
+
+    SKETCHFAB_SORT_BY = (('RELEVANCE', "Relevance", ""),
+                         ('LIKES', "Likes", ""),
+                         ('VIEWS', "Views", ""),
+                         ('RECENT', "Recent", ""))
+
+    SKETCHFAB_SEARCH_DOMAIN = (('DEFAULT', "All site", "", 0),
+                               ('OWN', "Own Models (PRO)", "", 1),
+                               ('STORE', "Store purchases", "", 2))
+
+    MAX_THUMBNAIL_HEIGHT = 256
+
+    SKETCHFAB_UPLOAD_LIMITS = {
+        "basic" : 100 * 1024 * 1024,
+        "plus": 100 * 1024 * 1024,
+        "pro": 200 * 1024 * 1024,
+        "prem": 200 * 1024 * 1024,
+        "biz": 500 * 1024 * 1024,
+        "ent": 500 * 1024 * 1024
+    }
+
+class Utils:
+    def humanify_size(size):
+        suffix = 'B'
+        readable = size
+
+        # Megabyte
+        if size > 1048576:
+            suffix = 'MB'
+            readable = size / 1048576.0
+        # Kilobyte
+        elif size > 1024:
+            suffix = 'KB'
+            readable = size / 1024.0
+
+        readable = round(readable, 2)
+        return '{}{}'.format(readable, suffix)
+
+    def humanify_number(number):
+        suffix = ''
+        readable = number
+
+        if number > 1000000:
+            suffix = 'M'
+            readable = number / 1000000.0
+
+        elif number > 1000:
+            suffix = 'K'
+            readable = number / 1000.0
+
+        readable = round(readable, 2)
+        return '{}{}'.format(readable, suffix)
+
+    def build_download_url(uid, use_org_profile=False, active_org=None):
+        if use_org_profile:
+            return '{}/{}/models/{}/download'.format(Config.SKETCHFAB_ORGS, active_org["uid"], uid)
+        else:
+            return '{}/{}/download'.format(Config.SKETCHFAB_MODEL, uid)
+
+    def thumbnail_file_exists(uid):
+        return os.path.exists(os.path.join(Config.SKETCHFAB_THUMB_DIR, '{}.jpeg'.format(uid)))
+
+    def clean_thumbnail_directory():
+        if not os.path.exists(Config.SKETCHFAB_THUMB_DIR):
+            return
+
+        from os import listdir
+        for file in listdir(Config.SKETCHFAB_THUMB_DIR):
+            os.remove(os.path.join(Config.SKETCHFAB_THUMB_DIR, file))
+
+    def clean_downloaded_model_dir(uid):
+        shutil.rmtree(os.path.join(Config.SKETCHFAB_MODEL_DIR, uid))
+
+    def get_thumbnail_url(thumbnails_json):
+        min_height  = 1e6
+        min_thumbnail = None
+        best_height = 0
+        best_thumbnail = None
+        for image in thumbnails_json['images']:
+            h = image['height']
+            if h <= Config.MAX_THUMBNAIL_HEIGHT and h > best_height:
+                best_height = h
+                best_thumbnail = image['url']
+            elif h < min_height:
+                min_height = h
+                min_thumbnail = image['url']
+        # Ensure we have a thumbnail if available thumbnails are all above MAX_THUMBNAIL_HEIGHT
+        if best_thumbnail is None and min_thumbnail is not None:
+            return min_thumbnail
+        return best_thumbnail
+
+    def make_model_name(gltf_data):
+        if 'title' in gltf_data.asset.extras:
+            return gltf_data.asset.extras['title']
+
+        return 'GLTFModel'
+
+    def setup_plugin():
+        if not os.path.exists(Config.SKETCHFAB_THUMB_DIR):
+            os.makedirs(Config.SKETCHFAB_THUMB_DIR)
+
+    def get_uid_from_thumbnail_url(thumbnail_url):
+        return thumbnail_url.split('/')[4]
+
+    def get_uid_from_model_url(model_url, use_org_profile=False):
+        try:
+            return model_url.split('/')[7] if use_org_profile else model_url.split('/')[5]
+        except:
+            ShowMessage("ERROR", "Url parsing error", "Error getting uid from url: {}".format(model_url))
+            return None
+
+    def get_uid_from_download_url(model_url):
+        return model_url.split('/')[6]
+
+    def clean_node_hierarchy(objects, root_name):
+        """
+        Removes the useless nodes in a hierarchy
+        TODO: Keep the transform (might impact Yup/Zup)
+        """
+        # Find the parent object
+        root = None
+        for object in objects:
+            if object.parent is None:
+                root = object
+        if root is None:
+            return None
+
+        # Go down its hierarchy until one child has multiple children, or a single mesh
+        # Keep the name while deleting objects in the hierarchy
+        diverges = False
+        while diverges==False:
+            children = root.children
+            if children is not None:
+
+                if len(children)>1:
+                    diverges = True
+                    root.name = root_name
+
+                if len(children)==1:
+                    if children[0].type != "EMPTY":
+                        diverges = True
+                        root.name = root_name
+                        if children[0].type == "MESH": # should always be the case
+                            matrixcopy = children[0].matrix_world.copy()
+                            children[0].parent = None
+                            children[0].matrix_world = matrixcopy
+                            bpy.data.objects.remove(root)
+                            children[0].name = root_name
+                            root = children[0]
+
+                    elif children[0].type == "EMPTY":
+                        diverges = False
+                        matrixcopy = children[0].matrix_world.copy()
+                        children[0].parent = None
+                        children[0].matrix_world = matrixcopy
+                        bpy.data.objects.remove(root)
+                        root = children[0]
+            else:
+                break
+
+        # Select the root Empty node
+        root.select_set(True)
+
+    def is_valid_uuid(uuid_to_test, version=4):
+        try:
+            uuid_obj = UUID(hex=uuid_to_test, version=version)
+            return True
+        except ValueError:
+            return False
+
+class Cache:
+    SKETCHFAB_CACHE_FILE = os.path.join(
+        bpy.utils.user_resource("SCRIPTS", path="sketchfab_cache", create=True),
+        ".cache"
+    ) # Use a user path to avoid permission-related errors
+
+    def read():
+        if not os.path.exists(Cache.SKETCHFAB_CACHE_FILE):
+            return {}
+
+        with open(Cache.SKETCHFAB_CACHE_FILE, 'rb') as f:
+            data = f.read().decode('utf-8')
+            return json.loads(data)
+
+    def get_key(key):
+        cache_data = Cache.read()
+        if key in cache_data:
+            return cache_data[key]
+
+    def save_key(key, value):
+        cache_data = Cache.read()
+        cache_data[key] = value
+        with open(Cache.SKETCHFAB_CACHE_FILE, 'wb+') as f:
+            f.write(json.dumps(cache_data).encode('utf-8'))
+
+    def delete_key(key):
+        cache_data = Cache.read()
+        if key in cache_data:
+            del cache_data[key]
+
+        with open(Cache.SKETCHFAB_CACHE_FILE, 'wb+') as f:
+            f.write(json.dumps(cache_data).encode('utf-8'))
+
 
 # helpers
 def get_sketchfab_login_props():
@@ -108,7 +373,10 @@ def get_sketchfab_props_proxy():
 
 def get_sketchfab_model(uid):
     skfb = get_sketchfab_props()
-    return skfb.search_results['current'][uid]
+    if "current" in skfb.search_results and uid in skfb.search_results["current"]:
+        return skfb.search_results['current'][uid]
+    else:
+        return None
 
 def run_default_search():
     searchthr = GetRequestThread(Config.DEFAULT_SEARCH, parse_results)
@@ -158,6 +426,7 @@ def set_import_status(status):
 class SketchfabApi:
     def __init__(self):
         self.access_token = ''
+        self.api_token = ''
         self.headers = {}
         self.username = ''
         self.display_name = ''
@@ -169,13 +438,19 @@ class SketchfabApi:
         self.use_org_profile = False
 
     def build_headers(self):
-        self.headers = {'Authorization': 'Bearer ' + self.access_token}
+        if self.access_token:
+            self.headers = {'Authorization': 'Bearer ' + self.access_token}
+        elif self.api_token:
+            self.headers = {'Authorization': 'Token ' + self.api_token}
+        else:
+            print("Empty authorization header")
+            self.headers = {}
 
-    def login(self, email, password):
+    def login(self, email, password, api_token):
         bpy.ops.wm.login_modal('INVOKE_DEFAULT')
 
     def is_user_logged(self):
-        if self.access_token and self.headers:
+        if (self.access_token or self.api_token) and self.headers:
             return True
 
         return False
@@ -185,17 +460,25 @@ class SketchfabApi:
 
     def logout(self):
         self.access_token = ''
+        self.api_token = ''
         self.headers = {}
         Cache.delete_key('username')
         Cache.delete_key('access_token')
+        Cache.delete_key('api_token')
         Cache.delete_key('key')
 
         props = get_sketchfab_props()
-        props.search_domain = "DEFAULT"
+        #props.search_domain = "DEFAULT"
         if 'current' in props.search_results:
             del props.search_results['current']
         pprops = get_sketchfab_props_proxy()
-        pprops.search_domain = "DEFAULT"
+        #pprops.search_domain = "DEFAULT"
+
+        self.user_orgs = []
+        self.active_org = None
+        self.use_org_profile = False
+        props.use_org_profile = False
+        pprops.use_org_profile = False
 
         bpy.ops.wm.sketchfab_search('EXEC_DEFAULT')
 
@@ -216,8 +499,11 @@ class SketchfabApi:
             self.plan_type = user_data['account']
             requests.get(Config.SKETCHFAB_ME + "/orgs", headers=self.headers, hooks={'response': self.parse_orgs_info})
         else:
-            print('Invalid access token')
+            print('\nInvalid access or API token\nYou can get your API token here:\nhttps://sketchfab.com/settings/password\n')
+            set_login_status('ERROR', 'Failed to authenticate')
+            ShowMessage("ERROR", "Failed to authenticate", "Invalid access or API token")
             self.access_token = ''
+            self.api_token = ''
             self.headers = {}
 
     def parse_orgs_info(self, r, *args, **kargs):
@@ -232,6 +518,7 @@ class SketchfabApi:
                 self.user_orgs.append({
                     "uid":         org["uid"],
                     "displayName": org["displayName"],
+                    "username":    org["username"],
                     "url":         org["publicProfileUrl"],
                     "projects":    [],
                 })
@@ -284,28 +571,21 @@ class SketchfabApi:
             if orgs_data["next"] is not None:
                 requests.get(orgs_data["next"], headers=self.headers, hooks={'response': self.parse_orgs_info})
 
-    def parse_login(self, r, *args, **kwargs):
-        if r.status_code == 200 and 'access_token' in r.json():
-            self.access_token = r.json()['access_token']
-            self.build_headers()
-            self.request_user_info()
-        else:
-            if 'error_description' in r.json():
-                print("Failed to login: {}".format(r.json()['error_description']))
-            else:
-                print('Login failed.\n {}'.format(r.json()))
+    def request_thumbnail(self, thumbnails_json, model_uid):
+        # Avoid requesting twice the same data
+        if model_uid not in thumbnailsProgress:
+            thumbnailsProgress.add(model_uid)
+            url = Utils.get_thumbnail_url(thumbnails_json)
+            thread = ThumbnailCollector(url)
+            thread.start()
 
-    def request_thumbnail(self, thumbnails_json):
-        url = Utils.get_thumbnail_url(thumbnails_json)
-        thread = ThumbnailCollector(url)
-        thread.start()
-
-    def request_model_info(self, uid):
+    def request_model_info(self, uid, callback=None):
+        callback = self.handle_model_info if callback is None else callback
         url = Config.SKETCHFAB_MODEL + '/' + uid
-        if self.use_org_profile:
+        if self.use_org_profile and self.active_org.get("uid"):
             url = Config.SKETCHFAB_ORGS + "/" + self.active_org["uid"] + "/models/" + uid
 
-        model_infothr = GetRequestThread(url, self.handle_model_info, self.headers)
+        model_infothr = GetRequestThread(url, callback, self.headers)
         model_infothr.start()
 
     def handle_model_info(self, r, *args, **kwargs):
@@ -313,7 +593,7 @@ class SketchfabApi:
         uid = Utils.get_uid_from_model_url(r.url, self.use_org_profile)
 
         # Dirty fix to avoid processing obsolete result data
-        if 'current' not in skfb.search_results or uid not in skfb.search_results['current']:
+        if 'current' not in skfb.search_results or uid is None or uid not in skfb.search_results['current']:
             return
 
         model = skfb.search_results['current'][uid]
@@ -327,9 +607,8 @@ class SketchfabApi:
 
     def search(self, query, search_cb):
         skfb = get_sketchfab_props()
-        if skfb.search_domain == "DEFAULT":
-            url = Config.BASE_SEARCH
-        elif skfb.search_domain == "OWN":
+        url = Config.BASE_SEARCH
+        if skfb.search_domain == "OWN":
             url = Config.BASE_SEARCH_OWN_MODELS
         elif skfb.search_domain == "STORE":
             url = Config.PURCHASED_MODELS
@@ -339,47 +618,106 @@ class SketchfabApi:
             url = Config.SKETCHFAB_ORGS + "/%s/models?isArchivesReady=true&projects=%s" % (self.active_org["uid"], skfb.search_domain)
 
         search_query = '{}{}'.format(url, query)
-
-        searchthr = GetRequestThread(search_query, search_cb, self.headers)
-        searchthr.start()
+        if search_query not in ongoingSearches:
+            ongoingSearches.add(search_query)
+            searchthr = GetRequestThread(search_query, search_cb, self.headers)
+            searchthr.start()
 
     def search_cursor(self, url, search_cb):
         requests.get(url, headers=self.headers, hooks={'response': search_cb})
 
+    def write_model_info(self, title, author, authorUrl, license, uid):
+        try:
+            downloadHistory = bpy.context.preferences.addons[__name__.split('.')[0]].preferences.downloadHistory
+            if downloadHistory != "":
+                downloadHistory = os.path.abspath(downloadHistory)
+                createFile = False
+                if not os.path.exists(downloadHistory):
+                    createFile = True
+                with open(downloadHistory, 'a+') as f:
+                    if createFile:
+                        f.write("Model name, Author name, Author url, License, Model link,\n")
+                    f.write("{}, {}, https://sketchfab.com/{}, {}, https://sketchfab.com/models/{},\n".format(
+                        title.replace(",", " "),
+                        author.replace(",", " "),
+                        authorUrl.replace(",", " "),
+                        license.replace(",", " "),
+                        uid
+                    ))
+        except:
+            print("Error encountered while saving data to history file")
+
+    def parse_model_info_request(self, r, *args, **kargs):
+        try:
+            if r.status_code == 200:
+                result = r.json()
+                title = result['name']
+                author = result['user']['displayName']
+                username = result['user']['username']
+                license = result["license"]["label"]
+                uid = result['uid']
+                self.write_model_info(title, author, username, license, uid)
+            else:
+                print("Error encountered while getting model info ({})\n{}\n{}".format(r.status_code, r.url, str(r.json())))
+        except:
+            print("Error encountered while parsing model info request: {}".format(r.url))
+
     def download_model(self, uid):
         skfb_model = get_sketchfab_model(uid)
-        if skfb_model.download_url:
-            # Check url sanity
-            if time.time() - skfb_model.time_url_requested < skfb_model.url_expires:
+        if skfb_model is not None: # The model comes from the search results
+            if skfb_model.download_url and (time.time() - skfb_model.time_url_requested < skfb_model.url_expires):
                 self.get_archive(skfb_model.download_url)
             else:
-                print("Download url is outdated, requesting a new one")
                 skfb_model.download_url = None
                 skfb_model.url_expires = None
                 skfb_model.time_url_requested = None
+                self.write_model_info(skfb_model.title, skfb_model.author, skfb_model.username, skfb_model.license, uid)
                 requests.get(Utils.build_download_url(uid, self.use_org_profile, self.active_org), headers=self.headers, hooks={'response': self.handle_download})
-        else:
-            requests.get(Utils.build_download_url(uid, self.use_org_profile, self.active_org), headers=self.headers, hooks={'response': self.handle_download})
+        else: # Model comes from a direct link
+            skfb = get_sketchfab_props()
+            download_url = ""
+
+            # If the model is in an org, find if the user has access to it
+            if "/orgs/" in skfb.manualImportPath:
+                try:
+                    orgName = skfb.manualImportPath.split("/orgs/")[1].split("/")[0]
+                    user_orgs = skfb.skfb_api.user_orgs
+                    orgUid = ""
+                    for org in user_orgs:
+                        if org["username"] == orgName:
+                            orgUid = org["uid"]
+                            break
+                    if orgUid:
+                        download_url = '{}/{}/models/{}/download'.format(Config.SKETCHFAB_ORGS, orgUid, uid)
+                    else:
+                        ShowMessage("ERROR", "User not in Organization", "User does not appear to belong to org %s" % (orgName))
+                        return
+                except:
+                    ShowMessage("ERROR", "Invalid url", "Cannot parse org name from url %s" % skfb.manualImportPath)
+                    return
+            # Otherwise, request a direct download and get model info
+            else:
+                download_url = Utils.build_download_url(uid)
+                requests.get('{}/{}'.format(Config.SKETCHFAB_MODEL, uid), headers=skfb.skfb_api.headers, hooks={'response': self.parse_model_info_request})
+
+            requests.get(download_url, headers=self.headers, hooks={'response': self.handle_download})
 
     def handle_download(self, r, *args, **kwargs):
         if r.status_code != 200 or 'gltf' not in r.json():
-            print('Download not available for this model')
+            ShowMessage("ERROR", "This model is not downloadable", "Make sure your account has enough rights to download the model")
             return
-
-        print("\n\nDownload data for {}\n{}\n\n".format(
-            Utils.get_uid_from_model_url(r.url, self.use_org_profile),
-            str(r.json())
-        ))
 
         skfb = get_sketchfab_props()
         uid = Utils.get_uid_from_model_url(r.url, self.use_org_profile)
+        if uid is None:
+            return
 
         gltf = r.json()['gltf']
         skfb_model = get_sketchfab_model(uid)
-        skfb_model.download_url = gltf['url']
-        skfb_model.time_url_requested = time.time()
-        skfb_model.url_expires = gltf['expires']
-
+        if skfb_model is not None:
+            skfb_model.download_url = gltf['url']
+            skfb_model.time_url_requested = time.time()
+            skfb_model.url_expires = gltf['expires']
         self.get_archive(gltf['url'])
 
     def get_archive(self, url):
@@ -424,7 +762,7 @@ class SketchfabApi:
                 import traceback
                 print(traceback.format_exc())
         else:
-            print("Failed to download model (url might be invalid)")
+            ShowMessage("ERROR", "Download error", "Failed to download model (url might be invalid)")
             model = get_sketchfab_model(uid)
             set_import_status("Import model ({})".format(model.download_size if model.download_size else 'fetching data'))
         return
@@ -446,6 +784,17 @@ class SketchfabLoginProps(bpy.types.PropertyGroup):
         default=""
     )
 
+    api_token : StringProperty(
+        name="API Token",
+        description="User API Token",
+        default=""
+    )
+
+    use_mail : BoolProperty(
+            name="Use mail / password",
+            description="Use mail/password login or API Token",
+            default=True,
+    )
 
     password : StringProperty(
         name="password",
@@ -509,12 +858,20 @@ def refresh_orgs(self, context):
     api   = props.skfb_api
 
     api.use_org_profile = pprops.use_org_profile
-    api.active_org      = [org for org in api.user_orgs if org["uid"] == pprops.active_org][0]
+    orgs = [org for org in api.user_orgs if org["uid"] == pprops.active_org]
+    api.active_org = orgs[0] if len(orgs) else None
 
     if pprops.use_org_profile != props.use_org_profile:
         props.use_org_profile = pprops.use_org_profile
     if pprops.active_org != props.active_org:
         props.active_org = pprops.active_org
+
+    if props.use_org_profile:
+        props.search_domain = "ACTIVE_ORG"
+        pprops.search_domain = "ACTIVE_ORG"
+    else:
+        props.search_domain = "DEFAULT"
+        pprops.search_domain = "DEFAULT"
 
     refresh_search(self, context)
 
@@ -564,7 +921,6 @@ class SketchfabBrowserPropsProxy(bpy.types.PropertyGroup):
             name="Sort by",
             items=get_sorting_options,
             description="Sort ",
-            default=0,
             update=refresh_search,
             )
 
@@ -586,8 +942,8 @@ class SketchfabBrowserPropsProxy(bpy.types.PropertyGroup):
             name="",
             items=get_available_search_domains,
             description="Search domain ",
-            default=0,
-            update=refresh_search
+            update=refresh_search,
+            default=None
             )
 
     use_org_profile : BoolProperty(
@@ -643,8 +999,6 @@ class SketchfabBrowserProps(bpy.types.PropertyGroup):
             name="Sort by",
             items=get_sorting_options,
             description="Sort ",
-            default=0,
-            update=refresh_search,
             )
 
     animated : BoolProperty(
@@ -663,22 +1017,18 @@ class SketchfabBrowserProps(bpy.types.PropertyGroup):
             name="Search domain",
             items=get_available_search_domains,
             description="Search domain ",
-            default=0,
-            update=refresh_search
             )
 
     use_org_profile : BoolProperty(
         name="Use organisation profile",
         description="Import/Export as a member of an organization\nLOL",
         default=False,
-        update=refresh_orgs
     )
 
     active_org : EnumProperty(
         name="Org",
         items=get_user_orgs,
         description="Active org",
-        update=refresh_orgs
     )
 
     status : StringProperty(name='status', default='idle')
@@ -701,6 +1051,18 @@ class SketchfabBrowserProps(bpy.types.PropertyGroup):
     is_latest_version : IntProperty(default=-1)
 
     import_status : StringProperty(name='import', default='')
+
+    manualImportBoolean : BoolProperty(
+            name="Import from url",
+            description="Import a downloadable model from a url",
+            default=False,
+            )
+    manualImportPath : StringProperty(
+            name="Url",
+            description="Paste full model url:\n* https://sketchfab.com/models/mymodel-XXXX\n* https://sketchfab.com/orgs/XXXX/3d-models/mymodel-YYYY",
+            default="",
+            maxlen=1024,
+            options={'TEXTEDIT_UPDATE'})
 
 
 def list_current_results(self, context):
@@ -737,50 +1099,7 @@ def list_current_results(self, context):
     return preview_collection['thumbnails']
 
 
-def draw_search(layout, context):
-    props = get_sketchfab_props_proxy()
-    skfb_api = get_sketchfab_props().skfb_api
-    col = layout.box().column(align=True)
 
-    ro = col.row()
-    ro.label(text="Search")
-    domain_col = ro.column()
-    domain_col.scale_x = 1.5
-    domain_col.enabled = skfb_api.is_user_logged();
-    domain_col.prop(props, "search_domain")
-
-    ro = col.row()
-    ro.scale_y = 1.25
-    ro.prop(props, "query")
-    ro.operator("wm.sketchfab_search", text="", icon='VIEWZOOM')
-
-    # User selected own models but is not pro
-    if props.search_domain == "OWN" and skfb_api.is_user_logged() and not skfb_api.is_user_pro():
-        col.label(text='A PRO account is required', icon='QUESTION')
-        col.label(text='to access your personal library')
-
-    # Display a collapsible box for filters
-    col = layout.box().column(align=True)
-    col.enabled = (props.search_domain != "STORE")
-    row = col.row()
-    row.prop(props, "expanded_filters", icon="TRIA_DOWN" if props.expanded_filters else "TRIA_RIGHT", icon_only=True, emboss=False)
-    row.label(text="Search filters")
-    if props.expanded_filters:
-        if props.search_domain in ["DEFAULT", "OWN"]:
-            col.separator()
-            col.prop(props, "categories")
-            col.prop(props, "sort_by")
-            col.prop(props, "face_count")
-            row = col.row()
-            row.prop(props, "pbr")
-            row.prop(props, "staffpick")
-            row.prop(props, "animated")
-        else:
-            col.separator()
-            col.prop(props, "sort_by")
-            col.prop(props, "face_count")
-
-    pprops = get_sketchfab_props()
 
 
 def draw_model_info(layout, model, context):
@@ -804,9 +1123,14 @@ def draw_model_info(layout, model, context):
     if(model.animated):
         ui_model_props.label(text='Animated: ' + model.animated, icon='ANIM_DATA')
 
-    import_ops = ui_model_props.column()
+    layout.separator()
+
+def draw_import_button(layout, model, context):
+
+    import_ops = layout.row()
     skfb = get_sketchfab_props()
-    import_ops.enabled = skfb.skfb_api.is_user_logged() and bpy.context.mode == 'OBJECT'
+
+    import_ops.enabled = skfb.skfb_api.is_user_logged() and bpy.context.mode == 'OBJECT' and Utils.is_valid_uuid(model.uid)
     if not skfb.skfb_api.is_user_logged():
         downloadlabel = 'Log in to download models'
     elif bpy.context.mode != 'OBJECT':
@@ -815,16 +1139,12 @@ def draw_model_info(layout, model, context):
         downloadlabel = "Import model"
         if model.download_size:
             downloadlabel += " ({})".format(model.download_size)
-
     if skfb.import_status:
         downloadlabel = skfb.import_status
 
     download_icon = 'IMPORT' if import_ops.enabled else 'INFO'
-    import_ops.label(text='')
-    row = import_ops.row()
-    row.scale_y = 2.0
-    row.operator("wm.sketchfab_download", icon=download_icon, text=downloadlabel, translate=False, emboss=True).model_uid = model.uid
-
+    import_ops.scale_y = 2.0
+    import_ops.operator("wm.sketchfab_download", icon=download_icon, text=downloadlabel, translate=False, emboss=True).model_uid = model.uid
 
 def set_log(log):
     get_sketchfab_props().status = log
@@ -870,7 +1190,7 @@ def import_model(gltf_path, uid):
 
 
 def build_search_request(query, pbr, animated, staffpick, face_count, category, sort_by):
-    final_query = '&q={}'.format(query)
+    final_query = '&q={}'.format(query) if query else ''
 
     if animated:
         final_query = final_query + '&animated=true'
@@ -906,6 +1226,9 @@ def build_search_request(query, pbr, animated, staffpick, face_count, category, 
 
 
 def parse_results(r, *args, **kwargs):
+
+    ongoingSearches.discard(r.url)
+
     skfb = get_sketchfab_props()
     json_data = r.json()
 
@@ -925,7 +1248,7 @@ def parse_results(r, *args, **kwargs):
         skfb.search_results['current'][result['uid']] = SketchfabModel(result)
 
         if not os.path.exists(os.path.join(Config.SKETCHFAB_THUMB_DIR, uid) + '.jpeg'):
-            skfb.skfb_api.request_thumbnail(result['thumbnails'])
+            skfb.skfb_api.request_thumbnail(result['thumbnails'], uid)
         elif uid not in skfb.custom_icons:
             skfb.custom_icons.load(uid, os.path.join(Config.SKETCHFAB_THUMB_DIR, "{}.jpeg".format(uid)), 'IMAGE')
 
@@ -987,24 +1310,27 @@ class ThumbnailCollector(threading.Thread):
                     dl += len(data)
                     f.write(data)
 
+        thumbnailsProgress.discard(uid)
+
         props = get_sketchfab_props()
         if uid not in props.custom_icons:
             props.custom_icons.load(uid, os.path.join(Config.SKETCHFAB_THUMB_DIR, "{}.jpeg".format(uid)), 'IMAGE')
 
 
 class LoginModal(bpy.types.Operator):
+    """Login into your account"""
     bl_idname = "wm.login_modal"
-    bl_label = "Import glTF model into Sketchfab"
+    bl_label = ""
     bl_options = {'INTERNAL'}
 
     is_logging : BoolProperty(default=False)
     error : BoolProperty(default=False)
     error_message : StringProperty(default='')
 
-    def exectue(self, context):
+    def execute(self, context):
         return {'FINISHED'}
 
-    def handle_login(self, r, *args, **kwargs):
+    def handle_mail_login(self, r, *args, **kwargs):
         browser_props = get_sketchfab_props()
         if r.status_code == 200 and 'access_token' in r.json():
             browser_props.skfb_api.access_token = r.json()['access_token']
@@ -1025,6 +1351,17 @@ class LoginModal(bpy.types.Operator):
 
         self.is_logging = False
 
+    def handle_token_login(self, api_token):
+        browser_props = get_sketchfab_props()
+        browser_props.skfb_api.api_token = api_token
+        login_props = get_sketchfab_login_props()
+        Cache.save_key('api_token', login_props.api_token)
+
+        browser_props.skfb_api.build_headers()
+        set_login_status('INFO', '')
+        browser_props.skfb_api.request_user_info()
+        self.is_logging = False
+
     def modal(self, context, event):
         if self.error:
             self.error = False
@@ -1042,8 +1379,11 @@ class LoginModal(bpy.types.Operator):
         try:
             context.window_manager.modal_handler_add(self)
             login_props = get_sketchfab_login_props()
-            url = '{}&username={}&password={}'.format(Config.SKETCHFAB_OAUTH, urllib.parse.quote_plus(login_props.email), urllib.parse.quote_plus(login_props.password))
-            requests.post(url, hooks={'response': self.handle_login})
+            if(login_props.use_mail):
+                url = '{}&username={}&password={}'.format(Config.SKETCHFAB_OAUTH, urllib.parse.quote_plus(login_props.email), urllib.parse.quote_plus(login_props.password))
+                requests.post(url, hooks={'response': self.handle_mail_login})
+            else:
+                self.handle_token_login(login_props.api_token)
         except Exception as e:
             self.error = True
             self.error_message = str(e)
@@ -1052,6 +1392,7 @@ class LoginModal(bpy.types.Operator):
 
 
 class ImportModalOperator(bpy.types.Operator):
+    """Imports the selected model into Blender"""
     bl_idname = "wm.import_modal"
     bl_label = "Import glTF model into Sketchfab"
     bl_options = {'INTERNAL'}
@@ -1059,12 +1400,13 @@ class ImportModalOperator(bpy.types.Operator):
     gltf_path : StringProperty()
     uid : StringProperty()
 
-    def exectue(self, context):
+    def execute(self, context):
         print('IMPORT')
         return {'FINISHED'}
 
     def modal(self, context, event):
-        bpy.context.scene.render.engine = Version.ENGINE
+        if bpy.context.scene.render.engine not in ["CYCLES", "BLENDER_EEVEE"]:
+            bpy.context.scene.render.engine = Version.ENGINE
         gltf_importer = glTFImporter(self.gltf_path)
         gltf_importer.read()
 
@@ -1159,8 +1501,12 @@ class LoginPanel(View3DPanel, bpy.types.Panel):
                     layout.prop(skfb_login, 'status', icon=skfb_login.status_type)
             else:
                 layout.label(text="Login to your Sketchfab account", icon='INFO')
-                layout.prop(skfb_login, "email")
-                layout.prop(skfb_login, "password")
+                layout.prop(skfb_login, "use_mail")
+                if skfb_login.use_mail:
+                    layout.prop(skfb_login, "email")
+                    layout.prop(skfb_login, "password")
+                else:
+                    layout.prop(skfb_login, "api_token")
                 ops_row = layout.row()
                 ops_row.operator('wm.sketchfab_signup', text='Create an account', icon='PLUS')
                 login_icon = "LINKED" if bpy.app.version < (2,80,0) else "USER"
@@ -1195,6 +1541,11 @@ class TeamsPanel(View3DPanel, bpy.types.Panel):
 
             pprops = get_sketchfab_props()
 
+class Model:
+    def __init__(self, _uid):
+        self.uid = _uid
+        self.download_size = 0
+
 class SketchfabBrowse(View3DPanel, bpy.types.Panel):
     bl_idname = "VIEW3D_PT_sketchfab_browse"
     bl_label = "Import"
@@ -1202,62 +1553,125 @@ class SketchfabBrowse(View3DPanel, bpy.types.Panel):
     uid   = ''
     label = "Search results"
 
+    def draw_search(self, layout, context):
+        prop = get_sketchfab_props()
+        props = get_sketchfab_props_proxy()
+        skfb_api = prop.skfb_api
+
+        # Add an option to import from url or uid
+        col = layout.box().column(align=True)
+        row = col.row()
+        row.prop(prop, "manualImportBoolean")
+
+        if prop.manualImportBoolean:
+            row = col.row()
+            row.prop(prop, "manualImportPath")
+        
+        else:
+            col = layout.box().column(align=True)
+            ro = col.row()
+            ro.label(text="Search")
+            domain_col = ro.column()
+            domain_col.scale_x = 1.5
+            domain_col.enabled = skfb_api.is_user_logged()
+            domain_col.prop(props, "search_domain")
+
+            ro = col.row()
+            ro.scale_y = 1.25
+            ro.prop(props, "query")
+            ro.operator("wm.sketchfab_search", text="", icon='VIEWZOOM')
+
+            # User selected own models but is not pro
+            if props.search_domain == "OWN" and skfb_api.is_user_logged() and not skfb_api.is_user_pro():
+                col.label(text='A PRO account is required', icon='QUESTION')
+                col.label(text='to access your personal library')
+
+            # Display a collapsible box for filters
+            col = layout.box().column(align=True)
+            col.enabled = (props.search_domain != "STORE")
+            row = col.row()
+            row.prop(props, "expanded_filters", icon="TRIA_DOWN" if props.expanded_filters else "TRIA_RIGHT", icon_only=True, emboss=False)
+            row.label(text="Search filters")
+            if props.expanded_filters:
+                if props.search_domain in ["DEFAULT", "OWN"]:
+                    col.separator()
+                    col.prop(props, "categories")
+                    col.prop(props, "sort_by")
+                    col.prop(props, "face_count")
+                    row = col.row()
+                    row.prop(props, "pbr")
+                    row.prop(props, "staffpick")
+                    row.prop(props, "animated")
+                else:
+                    col.separator()
+                    col.prop(props, "sort_by")
+                    col.prop(props, "face_count")
+
+        pprops = get_sketchfab_props()
+
     def draw_results(self, layout, context):
 
         props = get_sketchfab_props()
 
         col = layout.box().column(align=True)
 
-        #results = layout.column(align=True)
-        col.label(text=self.label)
+        if not props.manualImportBoolean:
 
-        model = None
+            #results = layout.column(align=True)
+            col.label(text=self.label)
 
-        result_pages_ops = col.row()
-        if props.skfb_api.prev_results_url:
-            result_pages_ops.operator("wm.sketchfab_search_prev", text="Previous page", icon='FRAME_PREV')
+            model = None
 
-        if props.skfb_api.next_results_url:
-            result_pages_ops.operator("wm.sketchfab_search_next", text="Next page", icon='FRAME_NEXT')
+            result_pages_ops = col.row()
+            if props.skfb_api.prev_results_url:
+                result_pages_ops.operator("wm.sketchfab_search_prev", text="Previous page", icon='FRAME_PREV')
 
-        #result_label = 'Click below to see more results'
-        #col.label(text=result_label, icon='INFO')
-        try:
-            col.template_icon_view(bpy.context.window_manager, 'result_previews', show_labels=True, scale=5.)
-        except Exception:
-            print('ResultsPanel: Failed to display results')
-            pass
+            if props.skfb_api.next_results_url:
+                result_pages_ops.operator("wm.sketchfab_search_next", text="Next page", icon='FRAME_NEXT')
 
-        if 'current' not in props.search_results or not len(props.search_results['current']):
-            self.label = 'No results'
-            return
+            #result_label = 'Click below to see more results'
+            #col.label(text=result_label, icon='INFO')
+            try:
+                col.template_icon_view(bpy.context.window_manager, 'result_previews', show_labels=True, scale=8)
+            except Exception:
+                print('ResultsPanel: Failed to display results')
+                pass
+
+            if 'current' not in props.search_results or not len(props.search_results['current']):
+                self.label = 'No results'
+                return
+            else:
+                self.label = "Search results"
+
+            if "current" in props.search_results:
+
+                if bpy.context.window_manager.result_previews not in props.search_results['current']:
+                    return
+
+                model = props.search_results['current'][bpy.context.window_manager.result_previews]
+
+                if not model:
+                    return
+
+                if self.uid != model.uid:
+                    self.uid = model.uid
+
+                    if not model.info_requested:
+                        props.skfb_api.request_model_info(model.uid)
+                        model.info_requested = True
+
+                draw_model_info(col, model, context)
+                draw_import_button(col, model, context)
         else:
-            self.label = "Search results"
-
-        if "current" in props.search_results:
-
-            if bpy.context.window_manager.result_previews not in props.search_results['current']:
-                return
-
-            model = props.search_results['current'][bpy.context.window_manager.result_previews]
-
-            if not model:
-                return
-
-            if self.uid != model.uid:
-                self.uid = model.uid
-
-                if not model.info_requested:
-                    props.skfb_api.request_model_info(model.uid)
-                    model.info_requested = True
-
-            draw_model_info(col, model, context)
+            uid = ""
+            if "sketchfab.com" in props.manualImportPath:
+                uid = props.manualImportPath[-32:]
+            m = Model(uid)
+            draw_import_button(col, m, context)
 
     def draw(self, context):
         self.layout.enabled = get_plugin_enabled()
-
-        draw_search(self.layout, context)
-
+        self.draw_search(self.layout, context)
         self.draw_results(self.layout, context)
 
     def invoke(self, context, event):
@@ -1285,13 +1699,17 @@ class SketchfabExportPanel(View3DPanel, bpy.types.Panel):
 
         # Model properties
         col = layout.box().column(align=True)
-        col.prop(props, "title")
-        col.prop(props, "description")
-        col.prop(props, "tags")
-        col.prop(props, "draft")
-        col.prop(props, "private")
-        if props.private:
-            col.prop(props, "password")
+        if not props.reuploadBoolean:
+            col.prop(props, "title")
+            col.prop(props, "description")
+            col.prop(props, "tags")
+            col.prop(props, "draft")
+            col.prop(props, "private")
+            if props.private:
+                col.prop(props, "password")
+        col.prop(props, "reuploadBoolean")
+        if props.reuploadBoolean:
+            col.prop(props, "reuploadPath")
 
         # Project selection if member of an org
         if api.active_org and api.use_org_profile:
@@ -1301,7 +1719,7 @@ class SketchfabExportPanel(View3DPanel, bpy.types.Panel):
         # Upload button
         row = layout.row()
         row.scale_y = 2.0
-        upload_label = "Upload"
+        upload_label = "Reupload" if props.reuploadBoolean else "Upload"
         upload_icon  = "EXPORT"
         upload_enabled = api.is_user_logged() and bpy.context.mode == 'OBJECT'
         if not upload_enabled:
@@ -1318,34 +1736,8 @@ class SketchfabExportPanel(View3DPanel, bpy.types.Panel):
         if model_url:
             layout.operator("wm.url_open", text="View Online Model", icon='URL').url = model_url
 
-def draw_results_icons(results, props, nbcol=4):
-    props = get_sketchfab_props()
-    current = props.search_results['current']
-
-    dimx = nbcol if current else 0
-    dimy = int(24 / nbcol) if current else 0
-    if dimx != 0 and dimy != 0:
-        for r in range(dimy):
-            ro = results.row()
-            for col in range(dimx):
-                col2 = ro.column(align=True)
-                index = r * dimx + col
-                if index >= len(current.keys()):
-                    return
-
-                model = current[list(current.keys())[index]]
-
-                if model.uid in props.custom_icons:
-                    col2.operator("wm.sketchfab_modelview", icon_value=props.custom_icons[model.uid].icon_id, text="{}".format(model.title + ' by ' + model.author)).uid = list(current.keys())[index]
-                else:
-                    col2.operator("wm.sketchfab_modelview", text="{}".format(model.title + ' by ' + model.author)).uid = list(current.keys())[index]
-    else:
-        results.row()
-        results.row().label(text='No results')
-        results.row()
-
-
 class SketchfabLogger(bpy.types.Operator):
+    """Log in / out your Sketchab.com account"""
     bl_idname = 'wm.sketchfab_login'
     bl_label = 'Sketchfab Login'
     bl_options = {'INTERNAL'}
@@ -1356,7 +1748,7 @@ class SketchfabLogger(bpy.types.Operator):
         set_login_status('FILE_REFRESH', 'Login to your Sketchfab account...')
         wm = context.window_manager
         if self.authenticate:
-            wm.sketchfab_browser.skfb_api.login(wm.sketchfab_api.email, wm.sketchfab_api.password)
+            wm.sketchfab_browser.skfb_api.login(wm.sketchfab_api.email, wm.sketchfab_api.password, wm.sketchfab_api.api_token)
         else:
             wm.sketchfab_browser.skfb_api.logout()
             wm.sketchfab_api.password = ''
@@ -1369,6 +1761,7 @@ class SketchfabModel:
     def __init__(self, json_data):
         self.title = str(json_data['name'])
         self.author = json_data['user']['displayName']
+        self.username = json_data['user']['username']
         self.uid = json_data['uid']
         self.vertex_count = json_data['vertexCount']
         self.face_count = json_data['faceCount']
@@ -1391,8 +1784,15 @@ class SketchfabModel:
         self.time_url_requested = None
         self.url_expires = None
 
+def ShowMessage(icon = "INFO", title = "Info", message = "Information"):
+    def draw(self, context):
+        self.layout.label(text=message)
+    print("\n{}: {}".format(icon, message))
+    bpy.context.window_manager.popup_menu(draw, title = title, icon = icon)
+
 
 class SketchfabDownloadModel(bpy.types.Operator):
+    """Import the selected model"""
     bl_idname = "wm.sketchfab_download"
     bl_label = "Downloading"
     bl_options = {'INTERNAL'}
@@ -1406,6 +1806,7 @@ class SketchfabDownloadModel(bpy.types.Operator):
 
 
 class ViewOnSketchfab(bpy.types.Operator):
+    """Upload your model to Sketchfab"""
     bl_idname = "wm.sketchfab_view"
     bl_label = "View the model on Sketchfab"
     bl_options = {'INTERNAL'}
@@ -1427,6 +1828,9 @@ def clear_search():
 
 
 class SketchfabSearch(bpy.types.Operator):
+    """Send a search query to Sketchfab
+    Searches on the selected domain (all site, own models for PRO+ users, organization...)
+    and takes into accounts various search filters"""
     bl_idname = "wm.sketchfab_search"
     bl_label = "Search Sketchfab"
     bl_options = {'INTERNAL'}
@@ -1443,6 +1847,7 @@ class SketchfabSearch(bpy.types.Operator):
 
 
 class SketchfabSearchNextResults(bpy.types.Operator):
+    """Loads the next batch of 24 models from the search results"""
     bl_idname = "wm.sketchfab_search_next"
     bl_label = "Search Sketchfab"
     bl_options = {'INTERNAL'}
@@ -1456,6 +1861,7 @@ class SketchfabSearchNextResults(bpy.types.Operator):
 
 
 class SketchfabSearchPreviousResults(bpy.types.Operator):
+    """Loads the previous batch of 24 models from the search results"""
     bl_idname = "wm.sketchfab_search_prev"
     bl_label = "Search Sketchfab"
     bl_options = {'INTERNAL'}
@@ -1467,26 +1873,8 @@ class SketchfabSearchPreviousResults(bpy.types.Operator):
         skfb_api.search_cursor(skfb_api.prev_results_url, parse_results)
         return {'FINISHED'}
 
-
-class SketchfabOpenModel(bpy.types.Operator):
-    bl_idname = "wm.sketchfab_open"
-    bl_label = "Downloading"
-    bl_options = {'INTERNAL'}
-
-    def execute(self, context):
-        return {'FINISHED'}
-
-    def draw(self, context):
-        layout = self.layout
-        col = layout.column()
-        col.label(text="I'm downloading your model!")
-
-    def invoke(self, context, event):
-        wm = context.window_manager
-        return wm.invoke_popup(self, width=550)
-
-
 class SketchfabCreateAccount(bpy.types.Operator):
+    """Create an account on sketchfab.com"""
     bl_idname = "wm.sketchfab_signup"
     bl_label = "Sketchfab"
     bl_options = {'INTERNAL'}
@@ -1498,6 +1886,7 @@ class SketchfabCreateAccount(bpy.types.Operator):
 
 
 class SketchfabNewVersion(bpy.types.Operator):
+    """Opens addon latest available release on github"""
     bl_idname = "wm.skfb_new_version"
     bl_label = "Sketchfab"
     bl_options = {'INTERNAL'}
@@ -1509,6 +1898,7 @@ class SketchfabNewVersion(bpy.types.Operator):
 
 
 class SketchfabReportIssue(bpy.types.Operator):
+    """Open an issue on github tracker"""
     bl_idname = "wm.skfb_report_issue"
     bl_label = "Sketchfab"
     bl_options = {'INTERNAL'}
@@ -1520,6 +1910,7 @@ class SketchfabReportIssue(bpy.types.Operator):
 
 
 class SketchfabHelp(bpy.types.Operator):
+    """Opens the addon README on github"""
     bl_idname = "wm.skfb_help"
     bl_label = "Sketchfab"
     bl_options = {'INTERNAL'}
@@ -1543,6 +1934,12 @@ def activate_plugin():
         props.skfb_api.access_token = cache_data['access_token']
         props.skfb_api.build_headers()
         props.skfb_api.request_user_info()
+        props.skfb_api.use_mail = True
+    elif 'api_token' in cache_data:
+        props.skfb_api.api_token = cache_data['api_token']
+        props.skfb_api.build_headers()
+        props.skfb_api.request_user_info()
+        props.skfb_api.use_mail = False
 
     global is_plugin_enabled
     is_plugin_enabled = True
@@ -1556,6 +1953,7 @@ def activate_plugin():
 
 
 class SketchfabEnable(bpy.types.Operator):
+    """Activate the addon (checks login, cache folders...)"""
     bl_idname = "wm.skfb_enable"
     bl_label = "Sketchfab"
     bl_options = {'INTERNAL'}
@@ -1610,6 +2008,16 @@ class SketchfabExportProps(bpy.types.PropertyGroup):
             default="",
             maxlen=48
             )
+    reuploadBoolean : BoolProperty(
+            name="Reupload",
+            description="Reupload the model over an existing one",
+            default=False,
+            )
+    reuploadPath : StringProperty(
+            name="Url",
+            description="Paste full model url to reupload to",
+            default="",
+            maxlen=1024)
     active_project : EnumProperty(
         name="Project",
         items=get_org_projects,
@@ -1651,6 +2059,9 @@ def upload_report(report_message, report_type):
 # upload the blend-file to sketchfab
 def upload(filepath, filename):
 
+    props = get_sketchfab_props()
+    api   = props.skfb_api
+
     wm = bpy.context.window_manager
     props = wm.sketchfab_export
 
@@ -1675,18 +2086,67 @@ def upload(filepath, filename):
         "modelFile": open(filepath, 'rb'),
     }
 
-    _headers = get_sketchfab_props().skfb_api.headers
+    _headers = api.headers
 
-    try:
-        api = get_sketchfab_props().skfb_api
+    uploadUrl = ""
+    modelUid  = ""
+    requestFunction = requests.post
+
+    # Are we reuploading ?
+    if props.reuploadBoolean:
+
+        requestFunction = requests.put
+
+        if "sketchfab.com/" not in props.reuploadPath:
+            return upload_report("reupload url is malformed %s" % props.reuploadPath, 'ERROR')
+
+        # Get the model uid
+        try:
+            modelUid = props.reuploadPath[-32:]
+            if not Utils.is_valid_uuid(modelUid):
+                return upload_report("reupload url does not end with a valid uid (32 characters string): %s" % props.reuploadPath, 'ERROR')
+        except:
+            return upload_report("reupload url is malformed %s" % props.reuploadPath, 'ERROR')
+
+        # If the model is in an org, find if the user has access to it
+        if "/orgs/" in props.reuploadPath:
+            if True:#try:
+                orgName = props.reuploadPath.split("/orgs/")[1].split("/")[0]
+                user_orgs = api.user_orgs
+                orgUid = ""
+                for org in user_orgs:
+                    if org["username"] == orgName:
+                        orgUid = org["uid"]
+                        break
+                if orgUid:
+                    uploadUrl = '{}/{}/models/{}'.format(Config.SKETCHFAB_ORGS, orgUid, modelUid)
+                else:
+                    return upload_report("User does not appear to belong to org %s" % (orgName), 'ERROR')
+            else:#aexcept:
+                return upload_report("Cannot parse the org name from the url %s" % props.reuploadPath, 'ERROR')
+        # Otherwise, request a direct reupload
+        else:
+            uploadUrl = '{}/{}'.format(Config.SKETCHFAB_MODEL, modelUid)
+
+        _data = {
+            "uid" : modelUid,
+            "source": "blender-exporter"
+        }
+
+    else:
+
+        # Org or not
         if len(api.user_orgs) and api.use_org_profile:
-            url = "%s/%s/models" % (Config.SKETCHFAB_ORGS, api.active_org["uid"])
+            uploadUrl = "%s/%s/models" % (Config.SKETCHFAB_ORGS, api.active_org["uid"])
             _data["orgProject"] = props.active_project
         else:
-            url = Config.SKETCHFAB_MODEL
+            uploadUrl = Config.SKETCHFAB_MODEL
 
-        r = requests.post(
-            url,
+    # Upload and parse the result
+    try:
+        print("Uploading to %s" % uploadUrl)
+        r = requestFunction(
+            uploadUrl,
             data    = _data,
             files   = _files,
             headers = _headers
@@ -1694,11 +2154,15 @@ def upload(filepath, filename):
     except requests.exceptions.RequestException as e:
         return upload_report("Upload failed. Error: %s" % str(e), 'WARNING')
 
-    result = r.json()
-    if r.status_code != requests.codes.created:
-        return upload_report("Upload failed. Error: %s" % result["error"], 'WARNING')
-    sf_state.model_url = Config.SKETCHFAB_URL + "/models/" + result["uid"]
-    return upload_report("Upload complete. Available on your sketchfab.com dashboard.", 'INFO')
+    if r.status_code not in [requests.codes.ok, requests.codes.created, requests.codes.no_content]:
+        return upload_report("Upload failed. Error code: %s\nMessage:\n%s" % (str(r.status_code), str(r)), 'WARNING')
+    else:
+        try:
+            result = r.json()
+            sf_state.model_url = Config.SKETCHFAB_URL + "/models/" + result["uid"]
+        except:
+            sf_state.model_url = Config.SKETCHFAB_URL + "/models/" + modelUid
+        return upload_report("Upload complete. Available on your sketchfab.com dashboard.", 'INFO')
 
 
 class ExportSketchfab(bpy.types.Operator):
@@ -1788,6 +2252,16 @@ class ExportSketchfab(bpy.types.Operator):
             self.report({'WARNING'}, "Error occured while preparing your file: %s" % str(e))
             return {'FINISHED'}
 
+        # Check the generated file size against the user plans, to know if the upload will succeed
+        upload_limit = Config.SKETCHFAB_UPLOAD_LIMITS[get_sketchfab_props().skfb_api.plan_type]
+        if get_sketchfab_props().skfb_api.use_org_profile:
+            upload_limit = Config.SKETCHFAB_UPLOAD_LIMITS["enterprise"]
+        if size > upload_limit:
+            human_size_limit    = Utils.humanify_size(upload_limit)
+            human_exported_size = Utils.humanify_size(size)
+            self.report({'ERROR'}, "Upload size is above your plan upload limit: %s > %s" % (human_exported_size, human_size_limit))
+            return {'FINISHED'}
+
         sf_state.uploading = True
         sf_state.size_label = Utils.humanify_size(size)
         self._thread = threading.Thread(
@@ -1806,8 +2280,74 @@ class ExportSketchfab(bpy.types.Operator):
         wm.event_timer_remove(self._timer)
         self._thread.join()
 
+def get_temporary_path():
+
+    # Get the preferences cache directory
+    cachePath = bpy.context.preferences.addons[__name__.split('.')[0]].preferences.cachePath
+
+    # The cachePath was set in the preferences
+    if cachePath:
+        return cachePath
+    else:
+        # Rely on Blender temporary directory
+        if bpy.app.version == (2, 79, 0):
+            if bpy.context.user_preferences.filepaths.temporary_directory:
+                return bpy.context.user_preferences.filepaths.temporary_directory
+            else:
+                return tempfile.mkdtemp()
+        else:
+            if bpy.context.preferences.filepaths.temporary_directory:
+                return bpy.context.preferences.filepaths.temporary_directory
+            else:
+                return tempfile.mkdtemp()
+
+def updateCacheDirectory(self, context):
+
+    # Get the cache path from the preferences, or a default temporary
+    path = os.path.abspath(get_temporary_path())
+
+    # Delete the old directory
+    # Won't delete anything upon plugin intialization, only when switching path in preferences
+    if Config.SKETCHFAB_TEMP_DIR and os.path.exists(Config.SKETCHFAB_TEMP_DIR) and os.path.isdir(Config.SKETCHFAB_TEMP_DIR):
+        shutil.rmtree(Config.SKETCHFAB_TEMP_DIR)
+
+    # Create the paths and directories for temporary directories
+    Config.SKETCHFAB_TEMP_DIR = os.path.join(path, "sketchfab_downloads")
+    Config.SKETCHFAB_THUMB_DIR = os.path.join(Config.SKETCHFAB_TEMP_DIR, 'thumbnails')
+    Config.SKETCHFAB_MODEL_DIR = os.path.join(Config.SKETCHFAB_TEMP_DIR, 'imports')
+    if not os.path.exists(Config.SKETCHFAB_TEMP_DIR): os.makedirs(Config.SKETCHFAB_TEMP_DIR)
+    if not os.path.exists(Config.SKETCHFAB_THUMB_DIR): os.makedirs(Config.SKETCHFAB_THUMB_DIR)
+    if not os.path.exists(Config.SKETCHFAB_MODEL_DIR): os.makedirs(Config.SKETCHFAB_MODEL_DIR)
+
+class SketchfabAddonPreferences(bpy.types.AddonPreferences):
+    bl_idname = __name__
+    cachePath: StringProperty(
+        name="Cache folder",
+        description=(
+            "Temporary directory for downloads from sketchfab.com\n"
+            "Set by the OS by default, make sure to have write access\n"
+            "to this directory if you set it manually"
+        ),
+        subtype='DIR_PATH',
+        update=updateCacheDirectory
+    )
+    downloadHistory : StringProperty(
+        name="Download history file",
+        description=(
+            ".csv file containing your downloads from sketchfab.com\n"
+            "If valid, the name, license and url of every model you\n"
+            "download through the plugin will be saved in this file"
+        ),
+        subtype='FILE_PATH'
+    )
+    def draw(self, context):
+        layout = self.layout
+        layout.prop(self, "cachePath", text="Download directory")
+        layout.prop(self, "downloadHistory", text="Download history (.csv)")
 
 classes = (
+    SketchfabAddonPreferences,
+
     # Properties
     SketchfabBrowserProps,
     SketchfabLoginProps,
@@ -1857,7 +2397,7 @@ def check_plugin_version(request, *args, **kwargs):
 
 def register():
     sketchfab_icon = bpy.utils.previews.new()
-    icons_dir      = os.path.join(os.path.dirname(__file__), "sketchfab", "resources")
+    icons_dir      = os.path.join(os.path.dirname(__file__), "resources")
     sketchfab_icon.load("skfb", os.path.join(icons_dir, "logo.png"), 'IMAGE')
     sketchfab_icon.load("0",    os.path.join(icons_dir, "placeholder.png"), 'IMAGE')
 
@@ -1883,6 +2423,9 @@ def register():
     bpy.types.WindowManager.sketchfab_export = PointerProperty(
                 type=SketchfabExportProps,
                 )
+
+    # If a cache path was set in preferences, use it
+    updateCacheDirectory(None, context=bpy.context)
 
 def unregister():
     for cls in classes:

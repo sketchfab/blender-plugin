@@ -56,13 +56,18 @@ def make_fcurve(action, co, data_path, index=0, group_name='', interpolation=Non
     fcurve.keyframe_points.foreach_set('co', co)
 
     # Setting interpolation
-    ipo = {
+    ipoString = {
         'CUBICSPLINE': 'BEZIER',
         'LINEAR': 'LINEAR',
         'STEP': 'CONSTANT',
     }[interpolation or 'LINEAR']
-    ipo = bpy.types.Keyframe.bl_rna.properties['interpolation'].enum_items[ipo].value
-    fcurve.keyframe_points.foreach_set('interpolation', [ipo] * len(fcurve.keyframe_points))
+    ipoInt = bpy.types.Keyframe.bl_rna.properties['interpolation'].enum_items[ipoString].value
+    try:
+        fcurve.keyframe_points.foreach_set('interpolation', [ipoInt] * len(fcurve.keyframe_points))
+    except:
+        # Expects a string in some versions < 2.93
+        for i in range(len(fcurve.keyframe_points)):
+            fcurve.keyframe_points[i].interpolation = ipoString
 
     # For CUBICSPLINE, also set the handle types to AUTO
     if interpolation == 'CUBICSPLINE':

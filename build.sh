@@ -10,6 +10,9 @@
 #
 # Make a symlink in blender from Powershell:
 # cmd /c mklink /d 'C:/Users/Norgeotloic/AppData/Roaming/Blender Foundation/Blender/2.79/scripts/addons/io_sketchfab_plugin' C:\Users\Norgeotloic\Documents\blender-plugin/
+#
+# Check the patch
+# git apply -v --reject --whitespace=fix --check ../khronos-gltf.patch
 
 # Get the plugin version
 version=$(cat addons/io_sketchfab_plugin/__init__.py | grep "'version': " | grep -o '(.*)' | tr -d '() ' | sed 's/,/-/g')

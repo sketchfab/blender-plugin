@@ -362,8 +362,7 @@ def pick_bind_pose(gltf):
     Pick the bind pose for all bones. Skinned meshes will be retargeted onto
     this bind pose during mesh creation.
     """
-    guess_bind_pose = True # Matches gltf.import_settings['guess_original_bind_pose']
-    if guess_bind_pose:
+    if True: # gltf.import_settings['guess_original_bind_pose']
         # Record inverse bind matrices. We're going to milk them for information
         # about the original bind pose.
         inv_binds = {'root': Matrix.Identity(4)}
@@ -391,7 +390,7 @@ def pick_bind_pose(gltf):
             vnode.bind_trans = Vector(vnode.base_trs[0])
             vnode.bind_rot = Quaternion(vnode.base_trs[1])
 
-            if guess_bind_pose:
+            if True: #gltf.import_settings['guess_original_bind_pose']:
                 # Try to guess bind pose from inverse bind matrices
                 if vnode_id in inv_binds and vnode.parent in inv_binds:
                     # (bind matrix) = (parent bind matrix) (bind local). Solve for bind local...
@@ -470,10 +469,11 @@ def temperance(gltf, bone_id, parent_rot):
     if child_locs:
         centroid = sum(child_locs, Vector((0, 0, 0)))
         rot = Vector((0, 1, 0)).rotation_difference(centroid)
-        # Snap to the local axes; required for local_rotation to be
-        # accurate when vnode has a non-uniform scaling.
-        # FORTUNE skips this, so it may look better, but may have errors.
-        rot = nearby_signed_perm_matrix(rot).to_quaternion()
+        if True: #gltf.import_settings['bone_heuristic'] == 'TEMPERANCE':
+            # Snap to the local axes; required for local_rotation to be
+            # accurate when vnode has a non-uniform scaling.
+            # FORTUNE skips this, so it may look better, but may have errors.
+            rot = nearby_signed_perm_matrix(rot).to_quaternion()
         return rot
 
     return parent_rot
