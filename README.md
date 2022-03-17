@@ -1,6 +1,6 @@
 # Sketchfab Blender Addon
 
-**Directly import and export models from and to Sketchfab in Blender (2.79 and 2.80)**
+**Directly import and export models from and to Sketchfab in Blender**
 
 * [Installation](#installation)
 * [Login](#login)
