@@ -106,7 +106,7 @@ class Config:
 
     SKETCHFAB_URL = 'https://sketchfab.com'
     DUMMY_CLIENTID = 'hGC7unF4BHyEB0s7Orz5E1mBd3LluEG0ILBiZvF9'
-    SKETCHFAB_OAUTH = SKETCHFAB_URL + '/oauth2/token/?grant_type=password&client_id=' + DUMMY_CLIENTID
+    SKETCHFAB_OAUTH = SKETCHFAB_URL + '/oauth2/token/'
     SKETCHFAB_API = 'https://api.sketchfab.com'
     SKETCHFAB_SEARCH = SKETCHFAB_API + '/v3/search'
     SKETCHFAB_MODEL = SKETCHFAB_API + '/v3/models'
@@ -1106,7 +1106,7 @@ def draw_model_info(layout, model, context):
     row = ui_model_props.row()
     row.label(text="{}".format(model.title), icon='OBJECT_DATA')
     row.operator("wm.sketchfab_view", text="", icon='LINKED').model_uid = model.uid
-    
+
     ui_model_props.label(text='{}'.format(model.author), icon='ARMATURE_DATA')
 
     if model.license:
@@ -1378,8 +1378,13 @@ class LoginModal(bpy.types.Operator):
             context.window_manager.modal_handler_add(self)
             login_props = get_sketchfab_login_props()
             if(login_props.use_mail):
-                url = '{}&username={}&password={}'.format(Config.SKETCHFAB_OAUTH, urllib.parse.quote_plus(login_props.email), urllib.parse.quote_plus(login_props.password))
-                requests.post(url, hooks={'response': self.handle_mail_login})
+                data = {
+                    'grant_type': 'password',
+                    'client_id': DUMMY_CLIENTID,
+                    'username': urllib.parse.quote_plus(login_props.email),
+                    'password': urllib.parse.quote_plus(login_props.password),
+                }
+                requests.post(Config.SKETCHFAB_OAUTH, data=data, hooks={'response': self.handle_mail_login})
             else:
                 self.handle_token_login(login_props.api_token)
         except Exception as e:
@@ -1564,7 +1569,7 @@ class SketchfabBrowse(View3DPanel, bpy.types.Panel):
         if prop.manualImportBoolean:
             row = col.row()
             row.prop(prop, "manualImportPath")
-        
+
         else:
             col = layout.box().column(align=True)
             ro = col.row()
@@ -2270,7 +2275,7 @@ class ExportSketchfab(bpy.types.Operator):
 
         wm.modal_handler_add(self)
         self._timer = wm.event_timer_add(1.0, window=context.window)
-        
+
         return {'RUNNING_MODAL'}
 
     def cancel(self, context):
