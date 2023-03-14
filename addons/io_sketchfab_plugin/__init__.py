@@ -2253,7 +2253,7 @@ class ExportSketchfab(bpy.types.Operator):
         # Check the generated file size against the user plans, to know if the upload will succeed
         upload_limit = Config.SKETCHFAB_UPLOAD_LIMITS[get_sketchfab_props().skfb_api.plan_type]
         if get_sketchfab_props().skfb_api.use_org_profile:
-            upload_limit = Config.SKETCHFAB_UPLOAD_LIMITS["enterprise"]
+            upload_limit = Config.SKETCHFAB_UPLOAD_LIMITS["ent"]
         if size > upload_limit:
             human_size_limit    = Utils.humanify_size(upload_limit)
             human_exported_size = Utils.humanify_size(size)
