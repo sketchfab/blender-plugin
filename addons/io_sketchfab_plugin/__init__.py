@@ -1184,7 +1184,7 @@ def run_async(func):
 
 
 def import_model(gltf_path, uid):
-    bpy.ops.wm.import_modal('INVOKE_DEFAULT', gltf_path=gltf_path, uid=uid)
+    bpy.ops.import_scene.gltf(filepath=gltf_path, files=[{"name":"scene.gltf", "name":"scene.gltf"}], loglevel=50)
 
 
 def build_search_request(query, pbr, animated, staffpick, face_count, category, sort_by):
