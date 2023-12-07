@@ -68,8 +68,8 @@ class Config:
     SKETCHFAB_REPORT_URL = 'https://help.sketchfab.com/hc/en-us/requests/new?type=exporters&subject=Blender+Plugin'
 
     SKETCHFAB_URL = 'https://sketchfab.com'
-    DUMMY_CLIENTID = 'hGC7unF4BHyEB0s7Orz5E1mBd3LluEG0ILBiZvF9'
-    SKETCHFAB_OAUTH = SKETCHFAB_URL + '/oauth2/token/?grant_type=password&client_id=' + DUMMY_CLIENTID
+    CLIENTID = 'hGC7unF4BHyEB0s7Orz5E1mBd3LluEG0ILBiZvF9'
+    SKETCHFAB_OAUTH = SKETCHFAB_URL + '/oauth2/token/'
     SKETCHFAB_API = 'https://api.sketchfab.com'
     SKETCHFAB_SEARCH = SKETCHFAB_API + '/v3/search'
     SKETCHFAB_MODEL = SKETCHFAB_API + '/v3/models'
@@ -1356,8 +1356,13 @@ class LoginModal(bpy.types.Operator):
             context.window_manager.modal_handler_add(self)
             login_props = get_sketchfab_login_props()
             if(login_props.use_mail):
-                url = '{}&username={}&password={}'.format(Config.SKETCHFAB_OAUTH, urllib.parse.quote_plus(login_props.email), urllib.parse.quote_plus(login_props.password))
-                requests.post(url, hooks={'response': self.handle_mail_login})
+                data = {
+                    'grant_type': 'password',
+                    'client_id': Config.CLIENTID,
+                    'username': login_props.email,
+                    'password': login_props.password,
+                }
+                requests.post(Config.SKETCHFAB_OAUTH, data=data, hooks={'response': self.handle_mail_login})
             else:
                 self.handle_token_login(login_props.api_token)
         except Exception as e:
