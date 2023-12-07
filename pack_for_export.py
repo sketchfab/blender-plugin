@@ -20,7 +20,6 @@ import json
 import sys
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-from blender.blender_version import Version
 
 SKETCHFAB_EXPORT_TEMP_DIR = sys.argv[7]
 SKETCHFAB_EXPORT_DATA_FILE = os.path.join(SKETCHFAB_EXPORT_TEMP_DIR, "export-sketchfab.json")
@@ -72,10 +71,10 @@ def prepare_assets(export_settings):
 
             if export_settings['selection'] and ob.type == 'MESH':
                 # Add relevant objects to the list of objects to remove
-                if not Version.get_visible(ob): # Not visible
+                if not ob.visible_get(): # Not visible
                     hidden.add(ob)
-                elif not Version.get_selected(ob): # Visible but not selected
-                    Version.set_visible(ob, False)
+                elif not ob.select_get(): # Visible but not selected
+                    ob.hide_set(True)
                     hidden.add(ob)
 
     for img in images:
