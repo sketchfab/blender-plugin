@@ -40,7 +40,7 @@ bl_info = {
     'author': 'Sketchfab',
     'license': 'APACHE2',
     'deps': '',
-    'version': (1, 5, 0),
+    'version': (1, 6, 0),
     "blender": (2, 80, 0),
     'location': 'View3D > Tools > Sketchfab',
     'warning': '',
