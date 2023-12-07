@@ -389,6 +389,7 @@ class SketchfabApi:
         self.next_results_url = None
         self.prev_results_url = None
         self.user_orgs = []
+        self.user_has_orgs = False
         self.active_org = None
         self.use_org_profile = False
 
@@ -430,6 +431,7 @@ class SketchfabApi:
         #pprops.search_domain = "DEFAULT"
 
         self.user_orgs = []
+        self.user_has_orgs = False
         self.active_org = None
         self.use_org_profile = False
         props.use_org_profile = False
@@ -452,7 +454,7 @@ class SketchfabApi:
             self.username = user_data['username']
             self.display_name = user_data['displayName']
             self.plan_type = user_data['account']
-            requests.get(Config.SKETCHFAB_ME + "/orgs", headers=self.headers, hooks={'response': self.parse_orgs_info})
+            requests.get(Config.SKETCHFAB_ME + "/orgs", headers=self.headers, hooks={'response': self.on_user_orgs_check})
         else:
             print('\nInvalid access or API token\nYou can get your API token here:\nhttps://sketchfab.com/settings/password\n')
             set_login_status('ERROR', 'Failed to authenticate')
@@ -460,6 +462,14 @@ class SketchfabApi:
             self.access_token = ''
             self.api_token = ''
             self.headers = {}
+
+    def request_user_orgs(self):
+        if not self.active_org:
+            requests.get(Config.SKETCHFAB_ME + "/orgs", headers=self.headers, hooks={'response': self.parse_orgs_info})
+            pass
+
+    def on_user_orgs_check(self, r, *args, **kargs):
+        self.user_has_orgs = bool((r.status_code == 200) and len(r.json().get("results", [])))
 
     def parse_orgs_info(self, r, *args, **kargs):
         """
@@ -521,6 +531,7 @@ class SketchfabApi:
             # Set the first org as active
             if len(self.user_orgs):
                 self.active_org = self.user_orgs[0]
+                self.user_has_orgs = True
 
             # Iterate on all orgs (not just the 24 first)
             if orgs_data["next"] is not None:
@@ -785,6 +796,8 @@ class SketchfabLoginProps(bpy.types.PropertyGroup):
 
 def get_user_orgs(self, context):
     api  = get_sketchfab_props().skfb_api
+    if not api.user_has_orgs:
+        api.request_user_orgs()
     return [(org["uid"], org["displayName"], "") for org in api.user_orgs]
 
 def get_org_projects(self, context):
@@ -796,7 +809,7 @@ def get_available_search_domains(self, context):
 
     search_domains = [domain for domain in Config.SKETCHFAB_SEARCH_DOMAIN]
 
-    if len(api.user_orgs) and api.use_org_profile:
+    if api.user_has_orgs and api.use_org_profile:
         search_domains = [
             ("ACTIVE_ORG", "Active Organization", api.active_org["displayName"], 0)
         ]
@@ -815,6 +828,12 @@ def refresh_orgs(self, context):
     api   = props.skfb_api
 
     api.use_org_profile = pprops.use_org_profile
+
+    if api.user_has_orgs and not api.active_org :
+        bpy.context.window.cursor_set("WAIT")
+        api.request_user_orgs()
+        bpy.context.window.cursor_set("DEFAULT")
+
     orgs = [org for org in api.user_orgs if org["uid"] == pprops.active_org]
     api.active_org = orgs[0] if len(orgs) else None
 
@@ -834,7 +853,7 @@ def refresh_orgs(self, context):
 
 def get_sorting_options(self, context):
     api = get_sketchfab_props().skfb_api
-    if len(api.user_orgs) and api.use_org_profile:
+    if api.user_has_orgs and api.use_org_profile:
         return (
             ('RELEVANCE', "Relevance", ""),
             ('RECENT', "Recent", "")
@@ -1478,7 +1497,7 @@ class TeamsPanel(View3DPanel, bpy.types.Panel):
 
         self.layout.enabled = get_plugin_enabled() and api.is_user_logged()
 
-        if not api.user_orgs:
+        if not api.user_has_orgs:
             self.layout.label(text="You are not part of an organization", icon='INFO')
             self.layout.operator("wm.url_open", text='Learn about Sketchfab for Teams').url = "https://sketchfab.com/features/teams"
         else:
@@ -2088,7 +2107,7 @@ def upload(filepath, filename):
     else:
 
         # Org or not
-        if len(api.user_orgs) and api.use_org_profile:
+        if api.user_has_orgs and api.use_org_profile:
             uploadUrl = "%s/%s/models" % (Config.SKETCHFAB_ORGS, api.active_org["uid"])
             _data["orgProject"] = props.active_project
         else:
