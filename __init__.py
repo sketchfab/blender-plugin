@@ -34,43 +34,6 @@ from bpy.props import (StringProperty,
                        IntProperty,
                        PointerProperty)
 
-from .io import *
-from .io.imp.gltf2_io_gltf import *
-from .blender.imp.gltf2_blender_gltf import *
-from .blender.blender_version import Version
-
-
-# Blender 2.79 has been shipped with openssl version 0.9.8 which uses a TLS protocol
-# that is now blocked for security reasons on websites (github.com for example)
-# In order to allow communication with github.com and other websites, the code will intend
-# to use the updated openssl version distributed with the addon.
-# Note: Blender 2.8 will have a more recent openssl version. This fix is only for 2.79 and olders
-if bpy.app.version < (2, 80, 0) and not bpy.app.build_platform == b'Windows':
-    try:
-        sslib_path = None
-        if bpy.app.build_platform == b'Darwin':
-            sslib_path = os.path.join(os.path.dirname(__file__), 'dependencies/_ssl.cpython-35m-darwin.so')
-        elif bpy.app.build_platform == b'Linux':
-            sslib_path = os.path.join(os.path.dirname(__file__), '/io_sketchfab_plugin/_ssl.cpython-35m-x86_64-linux-gnu.so')
-
-        import importlib.util
-        spec = importlib.util.spec_from_file_location("_ssl", sslib_path)
-        new_ssl = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(new_ssl)
-
-
-        from importlib import reload
-        import ssl
-        reload(ssl)
-        from requests.packages.urllib3.util import ssl_
-        reload(ssl_)
-        print('SSL python module has been successfully overriden by Sketchfab addon')
-        print('It might fix other addons having the same refused TLS protocol issue')
-    except Exception as e:
-        print(e)
-        print("Failed to override SSL lib. The plugin will not be able to check for updates")
-
-
 bl_info = {
     'name': 'Sketchfab Plugin',
     'description': 'Browse and download free Sketchfab downloadable models',
@@ -243,12 +206,6 @@ class Utils:
         if best_thumbnail is None and min_thumbnail is not None:
             return min_thumbnail
         return best_thumbnail
-
-    def make_model_name(gltf_data):
-        if 'title' in gltf_data.asset.extras:
-            return gltf_data.asset.extras['title']
-
-        return 'GLTFModel'
 
     def setup_plugin():
         if not os.path.exists(Config.SKETCHFAB_THUMB_DIR):
@@ -716,9 +673,11 @@ class SketchfabApi:
             skfb_model.download_url = gltf['url']
             skfb_model.time_url_requested = time.time()
             skfb_model.url_expires = gltf['expires']
-        self.get_archive(gltf['url'])
+            self.get_archive(gltf['url'], skfb_model.title)
+        else:
+            ShowMessage("ERROR", "Cannot retrieve information for this model", "")
 
-    def get_archive(self, url):
+    def get_archive(self, url, title):
         if url is None:
             print('Url is None')
             return
@@ -755,7 +714,7 @@ class SketchfabApi:
         gltf_path, gltf_zip = unzip_archive(archive_path)
         if gltf_path:
             try:
-                import_model(gltf_path, uid)
+                import_model(gltf_path, uid, title)
             except Exception as e:
                 import traceback
                 print(traceback.format_exc())
@@ -1183,8 +1142,8 @@ def run_async(func):
     return async_func
 
 
-def import_model(gltf_path, uid):
-    bpy.ops.wm.import_modal('INVOKE_DEFAULT', gltf_path=gltf_path, uid=uid)
+def import_model(gltf_path, uid, title):
+    bpy.ops.wm.import_modal('INVOKE_DEFAULT', gltf_path=gltf_path, uid=uid, title=title)
 
 
 def build_search_request(query, pbr, animated, staffpick, face_count, category, sort_by):
@@ -1397,6 +1356,7 @@ class ImportModalOperator(bpy.types.Operator):
 
     gltf_path : StringProperty()
     uid : StringProperty()
+    title: StringProperty()
 
     def execute(self, context):
         print('IMPORT')
@@ -1404,25 +1364,19 @@ class ImportModalOperator(bpy.types.Operator):
 
     def modal(self, context, event):
         if bpy.context.scene.render.engine not in ["CYCLES", "BLENDER_EEVEE"]:
-            bpy.context.scene.render.engine = Version.ENGINE
-        gltf_importer = glTFImporter(self.gltf_path)
-        gltf_importer.read()
-
+            bpy.context.scene.render.engine = "BLENDER_EEVEE"
         try:
             old_objects = [o.name for o in bpy.data.objects] # Get the current objects inorder to find the new node hierarchy
-            BlenderGlTF.create(gltf_importer)
+            bpy.ops.import_scene.gltf(filepath=self.gltf_path)
             set_import_status('')
             Utils.clean_downloaded_model_dir(self.uid)
-            root_name = Utils.make_model_name(gltf_importer.data)
-            Utils.clean_node_hierarchy([o for o in bpy.data.objects if o.name not in old_objects], root_name)
+            Utils.clean_node_hierarchy([o for o in bpy.data.objects if o.name not in old_objects], self.title)
             return {'FINISHED'}
         except Exception:
             import traceback
             print(traceback.format_exc())
             set_import_status('')
             return {'FINISHED'}
-
-        return {'RUNNING_MODAL'}
 
     def invoke(self, context, event):
         context.window_manager.modal_handler_add(self)
@@ -2395,7 +2349,7 @@ def check_plugin_version(request, *args, **kwargs):
 
 def register():
     sketchfab_icon = bpy.utils.previews.new()
-    icons_dir      = os.path.join(os.path.dirname(__file__), "resources")
+    icons_dir      = os.path.dirname(__file__)
     sketchfab_icon.load("skfb", os.path.join(icons_dir, "logo.png"), 'IMAGE')
     sketchfab_icon.load("0",    os.path.join(icons_dir, "placeholder.png"), 'IMAGE')
 
