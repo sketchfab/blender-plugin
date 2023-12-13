@@ -34,50 +34,13 @@ from bpy.props import (StringProperty,
                        IntProperty,
                        PointerProperty)
 
-from .io import *
-from .io.imp.gltf2_io_gltf import *
-from .blender.imp.gltf2_blender_gltf import *
-from .blender.blender_version import Version
-
-
-# Blender 2.79 has been shipped with openssl version 0.9.8 which uses a TLS protocol
-# that is now blocked for security reasons on websites (github.com for example)
-# In order to allow communication with github.com and other websites, the code will intend
-# to use the updated openssl version distributed with the addon.
-# Note: Blender 2.8 will have a more recent openssl version. This fix is only for 2.79 and olders
-if bpy.app.version < (2, 80, 0) and not bpy.app.build_platform == b'Windows':
-    try:
-        sslib_path = None
-        if bpy.app.build_platform == b'Darwin':
-            sslib_path = os.path.join(os.path.dirname(__file__), 'dependencies/_ssl.cpython-35m-darwin.so')
-        elif bpy.app.build_platform == b'Linux':
-            sslib_path = os.path.join(os.path.dirname(__file__), '/io_sketchfab_plugin/_ssl.cpython-35m-x86_64-linux-gnu.so')
-
-        import importlib.util
-        spec = importlib.util.spec_from_file_location("_ssl", sslib_path)
-        new_ssl = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(new_ssl)
-
-
-        from importlib import reload
-        import ssl
-        reload(ssl)
-        from requests.packages.urllib3.util import ssl_
-        reload(ssl_)
-        print('SSL python module has been successfully overriden by Sketchfab addon')
-        print('It might fix other addons having the same refused TLS protocol issue')
-    except Exception as e:
-        print(e)
-        print("Failed to override SSL lib. The plugin will not be able to check for updates")
-
-
 bl_info = {
     'name': 'Sketchfab Plugin',
     'description': 'Browse and download free Sketchfab downloadable models',
     'author': 'Sketchfab',
     'license': 'APACHE2',
     'deps': '',
-    'version': (1, 5, 0),
+    'version': (1, 6, 0),
     "blender": (2, 80, 0),
     'location': 'View3D > Tools > Sketchfab',
     'warning': '',
@@ -105,8 +68,8 @@ class Config:
     SKETCHFAB_REPORT_URL = 'https://help.sketchfab.com/hc/en-us/requests/new?type=exporters&subject=Blender+Plugin'
 
     SKETCHFAB_URL = 'https://sketchfab.com'
-    DUMMY_CLIENTID = 'hGC7unF4BHyEB0s7Orz5E1mBd3LluEG0ILBiZvF9'
-    SKETCHFAB_OAUTH = SKETCHFAB_URL + '/oauth2/token/?grant_type=password&client_id=' + DUMMY_CLIENTID
+    CLIENTID = 'hGC7unF4BHyEB0s7Orz5E1mBd3LluEG0ILBiZvF9'
+    SKETCHFAB_OAUTH = SKETCHFAB_URL + '/oauth2/token/'
     SKETCHFAB_API = 'https://api.sketchfab.com'
     SKETCHFAB_SEARCH = SKETCHFAB_API + '/v3/search'
     SKETCHFAB_MODEL = SKETCHFAB_API + '/v3/models'
@@ -243,12 +206,6 @@ class Utils:
         if best_thumbnail is None and min_thumbnail is not None:
             return min_thumbnail
         return best_thumbnail
-
-    def make_model_name(gltf_data):
-        if 'title' in gltf_data.asset.extras:
-            return gltf_data.asset.extras['title']
-
-        return 'GLTFModel'
 
     def setup_plugin():
         if not os.path.exists(Config.SKETCHFAB_THUMB_DIR):
@@ -432,6 +389,7 @@ class SketchfabApi:
         self.next_results_url = None
         self.prev_results_url = None
         self.user_orgs = []
+        self.user_has_orgs = False
         self.active_org = None
         self.use_org_profile = False
 
@@ -473,6 +431,7 @@ class SketchfabApi:
         #pprops.search_domain = "DEFAULT"
 
         self.user_orgs = []
+        self.user_has_orgs = False
         self.active_org = None
         self.use_org_profile = False
         props.use_org_profile = False
@@ -495,7 +454,7 @@ class SketchfabApi:
             self.username = user_data['username']
             self.display_name = user_data['displayName']
             self.plan_type = user_data['account']
-            requests.get(Config.SKETCHFAB_ME + "/orgs", headers=self.headers, hooks={'response': self.parse_orgs_info})
+            requests.get(Config.SKETCHFAB_ME + "/orgs", headers=self.headers, hooks={'response': self.on_user_orgs_check})
         else:
             print('\nInvalid access or API token\nYou can get your API token here:\nhttps://sketchfab.com/settings/password\n')
             set_login_status('ERROR', 'Failed to authenticate')
@@ -503,6 +462,14 @@ class SketchfabApi:
             self.access_token = ''
             self.api_token = ''
             self.headers = {}
+
+    def request_user_orgs(self):
+        if not self.active_org:
+            requests.get(Config.SKETCHFAB_ME + "/orgs", headers=self.headers, hooks={'response': self.parse_orgs_info})
+            pass
+
+    def on_user_orgs_check(self, r, *args, **kargs):
+        self.user_has_orgs = bool((r.status_code == 200) and len(r.json().get("results", [])))
 
     def parse_orgs_info(self, r, *args, **kargs):
         """
@@ -564,6 +531,7 @@ class SketchfabApi:
             # Set the first org as active
             if len(self.user_orgs):
                 self.active_org = self.user_orgs[0]
+                self.user_has_orgs = True
 
             # Iterate on all orgs (not just the 24 first)
             if orgs_data["next"] is not None:
@@ -716,9 +684,11 @@ class SketchfabApi:
             skfb_model.download_url = gltf['url']
             skfb_model.time_url_requested = time.time()
             skfb_model.url_expires = gltf['expires']
-        self.get_archive(gltf['url'])
+            self.get_archive(gltf['url'], skfb_model.title)
+        else:
+            ShowMessage("ERROR", "Cannot retrieve information for this model", "")
 
-    def get_archive(self, url):
+    def get_archive(self, url, title):
         if url is None:
             print('Url is None')
             return
@@ -755,7 +725,7 @@ class SketchfabApi:
         gltf_path, gltf_zip = unzip_archive(archive_path)
         if gltf_path:
             try:
-                import_model(gltf_path, uid)
+                import_model(gltf_path, uid, title)
             except Exception as e:
                 import traceback
                 print(traceback.format_exc())
@@ -826,6 +796,8 @@ class SketchfabLoginProps(bpy.types.PropertyGroup):
 
 def get_user_orgs(self, context):
     api  = get_sketchfab_props().skfb_api
+    if not api.user_has_orgs:
+        api.request_user_orgs()
     return [(org["uid"], org["displayName"], "") for org in api.user_orgs]
 
 def get_org_projects(self, context):
@@ -837,7 +809,7 @@ def get_available_search_domains(self, context):
 
     search_domains = [domain for domain in Config.SKETCHFAB_SEARCH_DOMAIN]
 
-    if len(api.user_orgs) and api.use_org_profile:
+    if api.user_has_orgs and api.use_org_profile:
         search_domains = [
             ("ACTIVE_ORG", "Active Organization", api.active_org["displayName"], 0)
         ]
@@ -856,6 +828,12 @@ def refresh_orgs(self, context):
     api   = props.skfb_api
 
     api.use_org_profile = pprops.use_org_profile
+
+    if api.user_has_orgs and not api.active_org :
+        bpy.context.window.cursor_set("WAIT")
+        api.request_user_orgs()
+        bpy.context.window.cursor_set("DEFAULT")
+
     orgs = [org for org in api.user_orgs if org["uid"] == pprops.active_org]
     api.active_org = orgs[0] if len(orgs) else None
 
@@ -875,7 +853,7 @@ def refresh_orgs(self, context):
 
 def get_sorting_options(self, context):
     api = get_sketchfab_props().skfb_api
-    if len(api.user_orgs) and api.use_org_profile:
+    if api.user_has_orgs and api.use_org_profile:
         return (
             ('RELEVANCE', "Relevance", ""),
             ('RECENT', "Recent", "")
@@ -1183,8 +1161,8 @@ def run_async(func):
     return async_func
 
 
-def import_model(gltf_path, uid):
-    bpy.ops.wm.import_modal('INVOKE_DEFAULT', gltf_path=gltf_path, uid=uid)
+def import_model(gltf_path, uid, title):
+    bpy.ops.wm.import_modal('INVOKE_DEFAULT', gltf_path=gltf_path, uid=uid, title=title)
 
 
 def build_search_request(query, pbr, animated, staffpick, face_count, category, sort_by):
@@ -1378,8 +1356,13 @@ class LoginModal(bpy.types.Operator):
             context.window_manager.modal_handler_add(self)
             login_props = get_sketchfab_login_props()
             if(login_props.use_mail):
-                url = '{}&username={}&password={}'.format(Config.SKETCHFAB_OAUTH, urllib.parse.quote_plus(login_props.email), urllib.parse.quote_plus(login_props.password))
-                requests.post(url, hooks={'response': self.handle_mail_login})
+                data = {
+                    'grant_type': 'password',
+                    'client_id': Config.CLIENTID,
+                    'username': login_props.email,
+                    'password': login_props.password,
+                }
+                requests.post(Config.SKETCHFAB_OAUTH, data=data, hooks={'response': self.handle_mail_login})
             else:
                 self.handle_token_login(login_props.api_token)
         except Exception as e:
@@ -1397,6 +1380,7 @@ class ImportModalOperator(bpy.types.Operator):
 
     gltf_path : StringProperty()
     uid : StringProperty()
+    title: StringProperty()
 
     def execute(self, context):
         print('IMPORT')
@@ -1404,25 +1388,19 @@ class ImportModalOperator(bpy.types.Operator):
 
     def modal(self, context, event):
         if bpy.context.scene.render.engine not in ["CYCLES", "BLENDER_EEVEE"]:
-            bpy.context.scene.render.engine = Version.ENGINE
-        gltf_importer = glTFImporter(self.gltf_path)
-        gltf_importer.read()
-
+            bpy.context.scene.render.engine = "BLENDER_EEVEE"
         try:
             old_objects = [o.name for o in bpy.data.objects] # Get the current objects inorder to find the new node hierarchy
-            BlenderGlTF.create(gltf_importer)
+            bpy.ops.import_scene.gltf(filepath=self.gltf_path)
             set_import_status('')
             Utils.clean_downloaded_model_dir(self.uid)
-            root_name = Utils.make_model_name(gltf_importer.data)
-            Utils.clean_node_hierarchy([o for o in bpy.data.objects if o.name not in old_objects], root_name)
+            Utils.clean_node_hierarchy([o for o in bpy.data.objects if o.name not in old_objects], self.title)
             return {'FINISHED'}
         except Exception:
             import traceback
             print(traceback.format_exc())
             set_import_status('')
             return {'FINISHED'}
-
-        return {'RUNNING_MODAL'}
 
     def invoke(self, context, event):
         context.window_manager.modal_handler_add(self)
@@ -1524,7 +1502,7 @@ class TeamsPanel(View3DPanel, bpy.types.Panel):
 
         self.layout.enabled = get_plugin_enabled() and api.is_user_logged()
 
-        if not api.user_orgs:
+        if not api.user_has_orgs:
             self.layout.label(text="You are not part of an organization", icon='INFO')
             self.layout.operator("wm.url_open", text='Learn about Sketchfab for Teams').url = "https://sketchfab.com/features/teams"
         else:
@@ -2134,7 +2112,7 @@ def upload(filepath, filename):
     else:
 
         # Org or not
-        if len(api.user_orgs) and api.use_org_profile:
+        if api.user_has_orgs and api.use_org_profile:
             uploadUrl = "%s/%s/models" % (Config.SKETCHFAB_ORGS, api.active_org["uid"])
             _data["orgProject"] = props.active_project
         else:
@@ -2395,7 +2373,7 @@ def check_plugin_version(request, *args, **kwargs):
 
 def register():
     sketchfab_icon = bpy.utils.previews.new()
-    icons_dir      = os.path.join(os.path.dirname(__file__), "resources")
+    icons_dir      = os.path.dirname(__file__)
     sketchfab_icon.load("skfb", os.path.join(icons_dir, "logo.png"), 'IMAGE')
     sketchfab_icon.load("0",    os.path.join(icons_dir, "placeholder.png"), 'IMAGE')
 

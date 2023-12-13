@@ -1,1 +1,0 @@
-Shared Blender importer and exporter code.

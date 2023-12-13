@@ -24,13 +24,11 @@ After installing the addon, two optional settings are available:
 
 <p align="center"><img style="max-width:100%" src="https://user-images.githubusercontent.com/52042414/158475442-3e6c90c3-983d-4d91-8f58-f8c3d20216dc.jpg"></p>
 
-**Note to Blender 2.79 OSX/Linux users:** The addon uses an embedded version of the SSL library. Do not hesitate to [report an issue](#report-an-issue) if you encounter any issue related to SSL.
-
 <br>
 
 ## Login
 
-After installation, the addon is available in the 3D view in the tab 'Sketchfab' in the Properties panel (shortcut **N**) for Blender 2.80 and after, and in the Tools panel (shortcut **T**) for Blender 2.79.
+After installation, the addon is available in the 3D view in the tab 'Sketchfab' in the Properties panel (shortcut **N**) for Blender 2.80+.
 
 Login (mandatory to import or export models) can be achieved through using the email and password associated to your Sketchfab account, or by using your API token, available in the settings of your [Sketchfab account](https://sketchfab.com/settings/password):
 
@@ -113,7 +111,7 @@ There is no "quick fix" for those kinds of behaviours, which are actively being 
 
 Here is a list of known issues on import, as well as some possible fixes. 
 
-Please note that the materials are being converted from Sketchfab to Cycles in Blender 2.79, and Eevee in Blender 2.80. If a material looks wrong, using the **Node editor** could therefore help you fixing possible issues.
+Please note that the materials are being converted from Sketchfab to Eevee in Blender 2.80+. If a material looks wrong, using the **Node editor** could therefore help you fixing possible issues.
 
 #### Mesh not parented to armature
 
