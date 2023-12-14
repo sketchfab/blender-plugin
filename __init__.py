@@ -40,7 +40,7 @@ bl_info = {
     'author': 'Sketchfab',
     'license': 'APACHE2',
     'deps': '',
-    'version': (1, 6, 0),
+    'version': (1, 6, 1),
     "blender": (2, 80, 0),
     'location': 'View3D > Tools > Sketchfab',
     'warning': '',
@@ -647,6 +647,9 @@ class SketchfabApi:
             if "/orgs/" in skfb.manualImportPath:
                 try:
                     orgName = skfb.manualImportPath.split("/orgs/")[1].split("/")[0]
+                    if skfb.skfb_api.user_has_orgs and not skfb.skfb_api.active_org:
+                        skfb.skfb_api.request_user_orgs()
+
                     user_orgs = skfb.skfb_api.user_orgs
                     orgUid = ""
                     for org in user_orgs:
@@ -680,13 +683,12 @@ class SketchfabApi:
 
         gltf = r.json()['gltf']
         skfb_model = get_sketchfab_model(uid)
-        if skfb_model is not None:
-            skfb_model.download_url = gltf['url']
-            skfb_model.time_url_requested = time.time()
-            skfb_model.url_expires = gltf['expires']
-            self.get_archive(gltf['url'], skfb_model.title)
-        else:
-            ShowMessage("ERROR", "Cannot retrieve information for this model", "")
+
+        # If the model name is not known at this step, we could try to do an additional API call to get it
+        # This can happen when the user chose to import a model from its url
+        # However this adds an additional call and a bit of complexity for org models (need additional parsing),
+        # so for a simple hotfix models imported this way will be called "Sketchfab model"
+        self.get_archive(gltf['url'], skfb_model.title if skfb_model else "Sketchfab Model")
 
     def get_archive(self, url, title):
         if url is None:
