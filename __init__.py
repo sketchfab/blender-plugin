@@ -1390,7 +1390,7 @@ class ImportModalOperator(bpy.types.Operator):
 
     def modal(self, context, event):
         if bpy.context.scene.render.engine not in ["CYCLES", "BLENDER_EEVEE"]:
-            bpy.context.scene.render.engine = "BLENDER_EEVEE"
+            bpy.context.scene.render.engine = "BLENDER_EEVEE_NEXT"
         try:
             old_objects = [o.name for o in bpy.data.objects] # Get the current objects inorder to find the new node hierarchy
             bpy.ops.import_scene.gltf(filepath=self.gltf_path)
