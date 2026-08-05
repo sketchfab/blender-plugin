@@ -1108,7 +1108,7 @@ def unzip_archive(archive_path):
         except zipfile.BadZipFile:
             print('Error when dezipping file')
             os.remove(archive_path)
-            print('Invaild zip. Try again')
+            print('Invalid zip. Try again')
             set_import_status('')
             return None, None
 
