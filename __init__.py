@@ -453,11 +453,21 @@ class SketchfabApi:
             self.plan_type = user_data['account']
             requests.get(Config.SKETCHFAB_ME + "/orgs", headers=self.headers, hooks={'response': self.on_user_orgs_check})
         else:
-            print('\nInvalid API token\nYou can get your API token here:\nhttps://sketchfab.com/settings/password\n')
-            set_login_status('ERROR', 'Failed to authenticate')
-            ShowMessage("ERROR", "Failed to authenticate", "Invalid API token")
             # Leave the rejected token in the panel field so it can be corrected.
             self.headers = {}
+            set_login_status('ERROR', 'Failed to authenticate')
+            if r.status_code == requests.codes.unauthorized:
+                # The token itself was rejected, so drop it from the cache. Left
+                # there, a dead token is restored and retried on every start.
+                Cache.delete_key('api_token')
+                print('\nInvalid API token\nYou can get your API token here:\nhttps://sketchfab.com/settings/password\n')
+                ShowMessage("ERROR", "Failed to authenticate", "Invalid API token")
+            else:
+                # A server-side or network failure says nothing about the token,
+                # so keep it cached instead of making the user paste it again.
+                print('\nCould not verify your Sketchfab account (HTTP {})\n'.format(r.status_code))
+                ShowMessage("ERROR", "Failed to authenticate",
+                            "Sketchfab returned HTTP {}, please try again".format(r.status_code))
 
     def request_user_orgs(self):
         if not self.active_org:
