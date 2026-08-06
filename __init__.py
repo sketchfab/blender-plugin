@@ -377,8 +377,10 @@ def set_import_status(status):
 
 
 class SketchfabApi:
+    # The API token itself lives in SketchfabLoginProps.api_token, which backs
+    # the panel field. Authentication state here is derived: headers is set from
+    # that token by build_headers() and cleared on logout or a rejected token.
     def __init__(self):
-        self.api_token = ''
         self.headers = {}
         self.username = ''
         self.display_name = ''
@@ -391,8 +393,9 @@ class SketchfabApi:
         self.use_org_profile = False
 
     def build_headers(self):
-        if self.api_token:
-            self.headers = {'Authorization': 'Token ' + self.api_token}
+        api_token = get_sketchfab_login_props().api_token
+        if api_token:
+            self.headers = {'Authorization': 'Token ' + api_token}
         else:
             print("Empty authorization header")
             self.headers = {}
@@ -401,16 +404,14 @@ class SketchfabApi:
         bpy.ops.wm.login_modal('INVOKE_DEFAULT')
 
     def is_user_logged(self):
-        if self.api_token and self.headers:
-            return True
-
-        return False
+        return bool(self.headers)
 
     def is_user_pro(self):
         return len(self.plan_type) and self.plan_type not in ['basic', 'plus']
 
     def logout(self):
-        self.api_token = ''
+        # The panel field keeps its value so the user can log straight back in;
+        # clearing headers is what marks the session as logged out.
         self.headers = {}
         Cache.delete_key('api_token')
         # Versions up to 1.6.1 cached an OAuth 'access_token' and the account
@@ -455,7 +456,7 @@ class SketchfabApi:
             print('\nInvalid API token\nYou can get your API token here:\nhttps://sketchfab.com/settings/password\n')
             set_login_status('ERROR', 'Failed to authenticate')
             ShowMessage("ERROR", "Failed to authenticate", "Invalid API token")
-            self.api_token = ''
+            # Leave the rejected token in the panel field so it can be corrected.
             self.headers = {}
 
     def request_user_orgs(self):
@@ -1265,7 +1266,6 @@ class LoginModal(bpy.types.Operator):
 
     def handle_token_login(self, api_token):
         browser_props = get_sketchfab_props()
-        browser_props.skfb_api.api_token = api_token
         Cache.save_key('api_token', api_token)
 
         browser_props.skfb_api.build_headers()
@@ -1832,12 +1832,11 @@ def activate_plugin():
     props = get_sketchfab_props()
     login_props = get_sketchfab_login_props()
 
-    # Restore the cached API token into both the api object and the UI field, so
-    # the token stays visible in the panel after Blender restarts.
+    # Restore the cached API token into the panel field, so it stays visible
+    # after Blender restarts; build_headers() then reads it back from there.
     api_token = Cache.get_key('api_token')
     if api_token:
         login_props.api_token = api_token
-        props.skfb_api.api_token = api_token
         props.skfb_api.build_headers()
         props.skfb_api.request_user_info()
 
