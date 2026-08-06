@@ -15,7 +15,6 @@ limitations under the License.
 """
 
 import os
-import urllib
 import requests
 import threading
 import time
@@ -62,14 +61,10 @@ is_plugin_enabled = False
 
 class Config:
 
-    ADDON_NAME = 'io_sketchfab'
     GITHUB_REPOSITORY_URL = 'https://github.com/sketchfab/blender-plugin'
     GITHUB_REPOSITORY_API_URL = 'https://api.github.com/repos/sketchfab/blender-plugin'
-    SKETCHFAB_REPORT_URL = 'https://help.sketchfab.com/hc/en-us/requests/new?type=exporters&subject=Blender+Plugin'
 
     SKETCHFAB_URL = 'https://sketchfab.com'
-    CLIENTID = 'hGC7unF4BHyEB0s7Orz5E1mBd3LluEG0ILBiZvF9'
-    SKETCHFAB_OAUTH = SKETCHFAB_URL + '/oauth2/token/'
     SKETCHFAB_API = 'https://api.sketchfab.com'
     SKETCHFAB_SEARCH = SKETCHFAB_API + '/v3/search'
     SKETCHFAB_MODEL = SKETCHFAB_API + '/v3/models'
@@ -379,9 +374,10 @@ def set_import_status(status):
 
 
 class SketchfabApi:
+    # The API token itself lives in SketchfabLoginProps.api_token, which backs
+    # the panel field. Authentication state here is derived: headers is set from
+    # that token by build_headers() and cleared on logout or a rejected token.
     def __init__(self):
-        self.access_token = ''
-        self.api_token = ''
         self.headers = {}
         self.username = ''
         self.display_name = ''
@@ -394,33 +390,32 @@ class SketchfabApi:
         self.use_org_profile = False
 
     def build_headers(self):
-        if self.access_token:
-            self.headers = {'Authorization': 'Bearer ' + self.access_token}
-        elif self.api_token:
-            self.headers = {'Authorization': 'Token ' + self.api_token}
+        api_token = get_sketchfab_login_props().api_token
+        if api_token:
+            self.headers = {'Authorization': 'Token ' + api_token}
         else:
             print("Empty authorization header")
             self.headers = {}
 
-    def login(self, email, password, api_token):
+    def login(self):
         bpy.ops.wm.login_modal('INVOKE_DEFAULT')
 
     def is_user_logged(self):
-        if (self.access_token or self.api_token) and self.headers:
-            return True
-
-        return False
+        return bool(self.headers)
 
     def is_user_pro(self):
         return len(self.plan_type) and self.plan_type not in ['basic', 'plus']
 
     def logout(self):
-        self.access_token = ''
-        self.api_token = ''
+        # The panel field keeps its value so the user can log straight back in;
+        # clearing headers is what marks the session as logged out.
         self.headers = {}
-        Cache.delete_key('access_token')
         Cache.delete_key('api_token')
-        Cache.delete_key('key')
+        # Versions up to 1.6.1 cached an OAuth 'access_token' and the account
+        # email under 'username'. Neither is written any more, but purge both so
+        # credentials and personal data left behind by an upgrade do not linger.
+        Cache.delete_key('access_token')
+        Cache.delete_key('username')
 
         props = get_sketchfab_props()
         #props.search_domain = "DEFAULT"
@@ -455,12 +450,21 @@ class SketchfabApi:
             self.plan_type = user_data['account']
             requests.get(Config.SKETCHFAB_ME + "/orgs", headers=self.headers, hooks={'response': self.on_user_orgs_check})
         else:
-            print('\nInvalid access or API token\nYou can get your API token here:\nhttps://sketchfab.com/settings/password\n')
-            set_login_status('ERROR', 'Failed to authenticate')
-            ShowMessage("ERROR", "Failed to authenticate", "Invalid access or API token")
-            self.access_token = ''
-            self.api_token = ''
+            # Leave the rejected token in the panel field so it can be corrected.
             self.headers = {}
+            set_login_status('ERROR', 'Failed to authenticate')
+            if r.status_code == requests.codes.unauthorized:
+                # The token itself was rejected, so drop it from the cache. Left
+                # there, a dead token is restored and retried on every start.
+                Cache.delete_key('api_token')
+                print('\nInvalid API token\nYou can get your API token here:\nhttps://sketchfab.com/settings/password\n')
+                ShowMessage("ERROR", "Failed to authenticate", "Invalid API token")
+            else:
+                # A server-side or network failure says nothing about the token,
+                # so keep it cached instead of making the user paste it again.
+                print('\nCould not verify your Sketchfab account (HTTP {})\n'.format(r.status_code))
+                ShowMessage("ERROR", "Failed to authenticate",
+                            "Sketchfab returned HTTP {}, please try again".format(r.status_code))
 
     def request_user_orgs(self):
         if not self.active_org:
@@ -743,13 +747,6 @@ class SketchfabLoginProps(bpy.types.PropertyGroup):
         default=""
     )
 
-    access_token : StringProperty(
-            name="access_token",
-            description="oauth access token",
-            subtype='PASSWORD',
-            default=""
-            )
-
     status : StringProperty(name='', default='')
     status_type : EnumProperty(
             name="Login status type",
@@ -759,9 +756,6 @@ class SketchfabLoginProps(bpy.types.PropertyGroup):
             description="Determines which icon to use",
             default='FILE_REFRESH'
             )
-
-    last_username : StringProperty(default="default")
-    last_password : StringProperty(default="default")
 
     skfb_api = SketchfabApi()
 
@@ -1279,9 +1273,7 @@ class LoginModal(bpy.types.Operator):
 
     def handle_token_login(self, api_token):
         browser_props = get_sketchfab_props()
-        browser_props.skfb_api.api_token = api_token
-        login_props = get_sketchfab_login_props()
-        Cache.save_key('api_token', login_props.api_token)
+        Cache.save_key('api_token', api_token)
 
         browser_props.skfb_api.build_headers()
         set_login_status('INFO', '')
@@ -1667,7 +1659,7 @@ class SketchfabLogger(bpy.types.Operator):
         set_login_status('FILE_REFRESH', 'Login to your Sketchfab account...')
         wm = context.window_manager
         if self.authenticate:
-            wm.sketchfab_browser.skfb_api.login(None, None, wm.sketchfab_api.api_token)
+            wm.sketchfab_browser.skfb_api.login()
         else:
             wm.sketchfab_browser.skfb_api.logout()
             set_login_status('FILE_REFRESH', '')
@@ -1827,7 +1819,7 @@ class SketchfabReportIssue(bpy.types.Operator):
 
     def execute(self, context):
         import webbrowser
-        webbrowser.open(Config.SKETCHFAB_REPORT_URL)
+        webbrowser.open('{}/issues/new'.format(Config.GITHUB_REPOSITORY_URL))
         return {'FINISHED'}
 
 
@@ -1845,12 +1837,13 @@ class SketchfabHelp(bpy.types.Operator):
 
 def activate_plugin():
     props = get_sketchfab_props()
-    login = get_sketchfab_login_props()
+    login_props = get_sketchfab_login_props()
 
-    # Fill login/access_token
-    cache_data = Cache.read()
-    if 'api_token' in cache_data:
-        props.skfb_api.api_token = cache_data['api_token']
+    # Restore the cached API token into the panel field, so it stays visible
+    # after Blender restarts; build_headers() then reads it back from there.
+    api_token = Cache.get_key('api_token')
+    if api_token:
+        login_props.api_token = api_token
         props.skfb_api.build_headers()
         props.skfb_api.request_user_info()
 
