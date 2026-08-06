@@ -413,10 +413,11 @@ class SketchfabApi:
         self.api_token = ''
         self.headers = {}
         Cache.delete_key('api_token')
-        # 'access_token' and 'key' are no longer written, but purge them so
-        # credentials cached by pre-token versions do not linger on disk.
+        # Versions up to 1.6.1 cached an OAuth 'access_token' and the account
+        # email under 'username'. Neither is written any more, but purge both so
+        # credentials and personal data left behind by an upgrade do not linger.
         Cache.delete_key('access_token')
-        Cache.delete_key('key')
+        Cache.delete_key('username')
 
         props = get_sketchfab_props()
         #props.search_domain = "DEFAULT"
@@ -1829,11 +1830,14 @@ class SketchfabHelp(bpy.types.Operator):
 
 def activate_plugin():
     props = get_sketchfab_props()
+    login_props = get_sketchfab_login_props()
 
-    # Restore the cached API token, if any
-    cache_data = Cache.read()
-    if 'api_token' in cache_data:
-        props.skfb_api.api_token = cache_data['api_token']
+    # Restore the cached API token into both the api object and the UI field, so
+    # the token stays visible in the panel after Blender restarts.
+    api_token = Cache.get_key('api_token')
+    if api_token:
+        login_props.api_token = api_token
+        props.skfb_api.api_token = api_token
         props.skfb_api.build_headers()
         props.skfb_api.request_user_info()
 
