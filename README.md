@@ -30,13 +30,13 @@ After installing the addon, two optional settings are available:
 
 After installation, the addon is available in the 3D view in the tab 'Sketchfab' in the Properties panel (shortcut **N**) for Blender 2.80+.
 
-Login (mandatory to import or export models) can be achieved through using the email and password associated to your Sketchfab account, or by using your API token, available in the settings of your [Sketchfab account](https://sketchfab.com/settings/password):
+Login (mandatory to import or export models) is done with your API token, available in the settings of your [Sketchfab account](https://sketchfab.com/settings/password):
 
 <p align="center"><img style="max-width:100%" src="https://user-images.githubusercontent.com/52042414/158475448-e229e9b3-309f-4701-bcf5-c134f6752ce5.jpg"></p>
 
 Your Sketchfab username should then be displayed upon successful login, and you will gain access to the full import and export capabilities of the addon. 
 
-Please note that your login credentials are stored in a temporary file on your local machine (to automatically log you in when starting Blender). You can clear it by simply logging out of your Sketchfab account through the **Log Out** button.
+Please note that your API token is stored in a temporary file on your local machine (to automatically log you in when starting Blender). You can clear it by simply logging out of your Sketchfab account through the **Log Out** button.
 
 ### Organization members
 
