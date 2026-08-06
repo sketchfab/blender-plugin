@@ -63,7 +63,6 @@ class Config:
 
     GITHUB_REPOSITORY_URL = 'https://github.com/sketchfab/blender-plugin'
     GITHUB_REPOSITORY_API_URL = 'https://api.github.com/repos/sketchfab/blender-plugin'
-    SKETCHFAB_REPORT_URL = 'https://help.sketchfab.com/hc/en-us/requests/new?type=exporters&subject=Blender+Plugin'
 
     SKETCHFAB_URL = 'https://sketchfab.com'
     SKETCHFAB_API = 'https://api.sketchfab.com'
@@ -1820,7 +1819,7 @@ class SketchfabReportIssue(bpy.types.Operator):
 
     def execute(self, context):
         import webbrowser
-        webbrowser.open(Config.SKETCHFAB_REPORT_URL)
+        webbrowser.open('{}/issues/new'.format(Config.GITHUB_REPOSITORY_URL))
         return {'FINISHED'}
 
 
