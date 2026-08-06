@@ -11,8 +11,6 @@
 
 *Based on [Blender glTF 2.0 Importer and Exporter](https://github.com/KhronosGroup/glTF-Blender-IO) from [Khronos Group](https://github.com/KhronosGroup)*
 
-<br>
-
 ## Installation
 
 To install the addon, just download the **sketchfab-x-y-z.zip** file attached to the [latest release](https://github.com/sketchfab/blender-plugin/releases/latest), and install it as a regular blender addon (User Preferences -> Addons -> Install from file).
@@ -22,9 +20,7 @@ After installing the addon, two optional settings are available:
 * Download history: path to a .csv file used to keep track of your downloads and model licenses
 * Download directory: use this directory for temporary downloads (thumbnails and models). By default, OS specific temporary paths are used, but you can set this to a different directory if you encounter errors linked to write access.
 
-<p align="center"><img style="max-width:100%" src="https://user-images.githubusercontent.com/52042414/158475442-3e6c90c3-983d-4d91-8f58-f8c3d20216dc.jpg"></p>
-
-<br>
+<p><img width="840" height="582" alt="blender-addon-install" src="https://github.com/user-attachments/assets/8638d1ab-9db5-4639-a271-82bfec09b941" /></p>
 
 ## Login
 
@@ -32,7 +28,7 @@ After installation, the addon is available in the 3D view in the tab 'Sketchfab'
 
 Login (mandatory to import or export models) can be achieved through using the email and password associated to your Sketchfab account, or by using your API token, available in the settings of your [Sketchfab account](https://sketchfab.com/settings/password):
 
-<p align="center"><img style="max-width:100%" src="https://user-images.githubusercontent.com/52042414/158475448-e229e9b3-309f-4701-bcf5-c134f6752ce5.jpg"></p>
+<p><img width="467" height="320" alt="blender-addon-login" src="https://github.com/user-attachments/assets/35b60a70-0d44-4025-be5d-59fa261f7348" /></p>
 
 Your Sketchfab username should then be displayed upon successful login, and you will gain access to the full import and export capabilities of the addon. 
 
@@ -42,13 +38,11 @@ Please note that your login credentials are stored in a temporary file on your l
 
 If you are a member of a [Sketchfab organization](https://sketchfab.com/3d-asset-management), you will be able to select the organization you belong to in the "Sketchfab for Teams" dropdown. Doing so will allow you to browse, import and export models from and to specific projects within your organization.
 
-<br>
-
 ## Import a model from Sketchfab
 
 Once logged in, you should be able to easily import any downloadable model from Sketchfab. 
 
-<p align="center"><img style="max-width:100%" src="https://user-images.githubusercontent.com/52042414/158475452-3bce2d73-5e46-4ce9-a4fc-f6a6a7e1904c.jpg"></p>
+<p><img style="max-width:100%" src="https://user-images.githubusercontent.com/52042414/158475452-3bce2d73-5e46-4ce9-a4fc-f6a6a7e1904c.jpg"></p>
 
 To do so, run a search query and adapt the search options in the **Search filters** menu. The dropdown located above the search bar lets you specify the type of models you are browsing through:
 
@@ -59,17 +53,15 @@ To do so, run a search query and adapt the search options in the **Search filter
 
 Clicking the **Search Results** thumbnail allows to navigate through the search results, and selecting a thumbnail gives you details before import:
 
-<p align="center"><img style="max-width:100%" src="https://user-images.githubusercontent.com/52042414/158475456-0c6c1f68-10a4-4a35-997b-9b175e4accc7.jpg"></p>
+<p><img style="max-width:100%" src="https://user-images.githubusercontent.com/52042414/158475456-0c6c1f68-10a4-4a35-997b-9b175e4accc7.jpg"></p>
 
 If this fits your usecase better, you can also select the "Import from url" option to import a downloadable model through its full url, formatted as "http://sketchfab.com/3d-models/model-name-XXXX" or "https://sketchfab.com/orgs/OrgName/3d-models/model-name-XXXX" for organizations' models:
 
-<p align="center"><img style="max-width:100%" src="https://user-images.githubusercontent.com/52042414/158480653-568f6a91-bcd4-4009-b927-4d5ffc400658.png"></p>
+<p><img style="max-width:100%" src="https://user-images.githubusercontent.com/52042414/158480653-568f6a91-bcd4-4009-b927-4d5ffc400658.png"></p>
 
 When importing publicly available models, a text file named **sf_attributions** will automatically be created inside Blender. The creator credits and license informations for the downloaded models will be appended to this file. It can be accessed in the **Text Editor** workspace.
 
-<p align="center"><img style="max-width:100%" src="https://dl.dropbox.com/scl/fi/wbj15y2wfekxof06r9v0a/Screenshot-2024-06-15-155042.png?rlkey=8pk0yk768znwu7pxc8yk7e0cv&st=17d46hjr&dl=0"></p>
-
-<br>
+<p><img style="max-width:100%" src="https://dl.dropbox.com/scl/fi/wbj15y2wfekxof06r9v0a/Screenshot-2024-06-15-155042.png?rlkey=8pk0yk768znwu7pxc8yk7e0cv&st=17d46hjr&dl=0"></p>
 
 ## Export a model to Sketchfab
 
@@ -79,7 +71,7 @@ You can also choose to keep the exported model as a draft (unchecking the checkb
 
 Finally, an option is given to [reupload a model](https://help.sketchfab.com/hc/en-us/articles/203064088-Reuploading-a-Model) by specifying the model's full url, formatted as "http://sketchfab.com/3d-models/model-name-XXXX" (or "https://sketchfab.com/orgs/OrgName/3d-models/model-name-XXXX" for organizations' models). Make sure to double check the model link you are reuploading to before proceeding.
 
-<p align="center"><img style="max-width:100%" src="https://user-images.githubusercontent.com/52042414/158475447-010d167e-42ae-4854-879f-137adda2fa61.jpg"></p>
+<p><img style="max-width:100%" src="https://user-images.githubusercontent.com/52042414/158475447-010d167e-42ae-4854-879f-137adda2fa61.jpg"></p>
 
 ### A note on material support
 
@@ -98,8 +90,7 @@ Note that Opacity and Backface Culling parameters should be set in the **Options
 
 Here is an example of a compatible node graph with backface culling and alpha mode correctly set (Blender 2.80 - Eevee renderer):
 
-<p align="center"><img style="max-width:100%" src="https://user-images.githubusercontent.com/52042414/64164529-b4070380-ce43-11e9-8602-995b083ac722.jpg"></p>
-
+<p><img style="max-width:100%" src="https://user-images.githubusercontent.com/52042414/64164529-b4070380-ce43-11e9-8602-995b083ac722.jpg"></p>
 
 ## Known Issues
 
@@ -152,7 +143,7 @@ As of now, textures colorspace set in Blender are not automatically converted to
 
 ## Report an issue
 
-If you feel like you've encountered a bug not listed in the [known issues](#known-issues), or that the addon lacks an important feature, you can contact us through [Sketchfab's Help Center](https://help.sketchfab.com/hc/en-us/requests/new?type=exporters&subject=Blender+Plugin) (or directly from the addon through the **Report an issue** button).
+If you feel like you've encountered a bug not listed in the [known issues](#known-issues), or that the addon lacks an important feature, create a new issue here on GitHub.
 
 To help us track a possible error, please try to append the logs of Blender's console in your message:
  
