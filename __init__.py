@@ -2125,13 +2125,21 @@ class ExportSketchfab(bpy.types.Operator):
 
         SKETCHFAB_EXPORT_DATA_FILE = os.path.join(tempdir, "export-sketchfab.json")
 
-        try:
+                try:
+            # Capture the exact interactive selection before saving the temporary
+            # .blend copy. Keep unselected objects in the scene so dependencies
+            # such as Boolean cutters can still be evaluated during GLB export.
+            selected_object_names = []
+            if props.selection:
+                selected_object_names = [obj.name for obj in context.selected_objects]
+
             # save a copy of actual scene but don't interfere with the users models
             bpy.ops.wm.save_as_mainfile(filepath=filepath, compress=True, copy=True)
 
             with open(SKETCHFAB_EXPORT_DATA_FILE, 'w') as s:
                 json.dump({
                         "selection": props.selection,
+                        "selected_objects": selected_object_names,
                         }, s)
 
             subprocess.check_call([
