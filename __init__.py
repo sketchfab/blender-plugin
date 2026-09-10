@@ -1049,7 +1049,7 @@ def draw_model_info(layout, model, context):
     row = ui_model_props.row()
     row.label(text="{}".format(model.title), icon='OBJECT_DATA')
     row.operator("wm.sketchfab_view", text="", icon='LINKED').model_uid = model.uid
-    
+
     ui_model_props.label(text='{}'.format(model.author), icon='ARMATURE_DATA')
 
     if model.license:
@@ -1477,7 +1477,7 @@ class SketchfabBrowse(View3DPanel, bpy.types.Panel):
         if prop.manualImportBoolean:
             row = col.row()
             row.prop(prop, "manualImportPath")
-        
+
         else:
             col = layout.box().column(align=True)
             ro = col.row()
@@ -2151,6 +2151,8 @@ class ExportSketchfab(bpy.types.Operator):
                 size = r["size"]
                 props.filepath = r["filepath"]
                 filename = r["filename"]
+                for warning in r.get("warnings", []):
+                    self.report({'WARNING'}, warning)
 
             os.remove(SKETCHFAB_EXPORT_DATA_FILE)
 
@@ -2178,7 +2180,7 @@ class ExportSketchfab(bpy.types.Operator):
 
         wm.modal_handler_add(self)
         self._timer = wm.event_timer_add(1.0, window=context.window)
-        
+
         return {'RUNNING_MODAL'}
 
     def cancel(self, context):
@@ -2357,7 +2359,7 @@ def register():
 
 class SF_Attributions:
 
-    def append_to_attributions(self, text): 
+    def append_to_attributions(self, text):
         # Check if "sf_attributions" text file already exists
         if "sf_attributions" not in bpy.data.texts:
             # Create a new text file named "sf_attributions"
@@ -2369,7 +2371,7 @@ class SF_Attributions:
 
          # Move the cursor to the end of the text block
         text_block.cursor_set(len(text_block.as_string()))
-        
+
         # Append the new text
         text_block.write(text + "\n")
         print("Credits appended to 'sf_attributions' file.")
