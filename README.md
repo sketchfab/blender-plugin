@@ -30,7 +30,7 @@ Login (mandatory to import or export models) is done with your API token, availa
 
 <p><img width="467" height="320" alt="blender-add-on-login" src="https://github.com/user-attachments/assets/35b60a70-0d44-4025-be5d-59fa261f7348" /></p>
 
-Your Sketchfab username should then be displayed upon successful login, and you will gain access to the full import and export capabilities of the add-on. 
+Your Sketchfab username should then be displayed upon successful login, and you will gain access to the full import and export capabilities of the add-on.
 
 Please note that your API token is stored in a temporary file on your local machine (to automatically log you in when starting Blender). You can clear it by simply logging out of your Sketchfab account through the **Log Out** button.
 
@@ -40,7 +40,7 @@ If you are a member of a [Sketchfab organization](https://sketchfab.com/3d-asset
 
 ## Import a model from Sketchfab
 
-Once logged in, you should be able to easily import any downloadable model from Sketchfab. 
+Once logged in, you should be able to easily import any downloadable model from Sketchfab.
 
 <p><img width="873" height="949" alt="blender-addon-import" src="https://github.com/user-attachments/assets/f600448c-6a72-498f-ad5f-951a3bfe3314" /></p>
 
@@ -86,7 +86,7 @@ The best material support comes with the **Principled BSDF** node, having either
 * Alpha
 * Emission
 
-Note that Opacity and Backface Culling parameters should be set in the **Options** tab of the material's Properties panel in order to be directly activated in Sketchfab's 3D settings. 
+Note that Opacity and Backface Culling parameters should be set in the **Options** tab of the material's Properties panel in order to be directly activated in Sketchfab's 3D settings.
 
 Here is an example of a compatible node graph with backface culling and alpha mode correctly set (Blender 2.80 - Eevee renderer):
 
@@ -104,7 +104,7 @@ There is no "quick fix" for those kinds of behaviours, which are actively being 
 
 ### Import
 
-Here is a list of known issues on import, as well as some possible fixes. 
+Here is a list of known issues on import, as well as some possible fixes.
 
 Please note that the materials are being converted from Sketchfab to Eevee in Blender 2.80+. If a material looks wrong, using the **Node editor** could therefore help you fixing possible issues.
 
@@ -132,7 +132,7 @@ Some transparency settings might not be processed correctly, and just using a **
 
 #### High Resolution textures
 
-In some very specific cases, the processing of your model can crash due to "heavy" textures. 
+In some very specific cases, the processing of your model can crash due to "heavy" textures.
 
 If your model does not process correctly in Sketchfab and that you are using multiple high resolution textures (for instance materials with 16k textures or multiple 8k textures), you can either try to reduce the original images size or upload your model without texture and add them later in Sketchfab's 3D settings.
 
@@ -145,6 +145,6 @@ As of now, textures colorspace set in Blender are not automatically converted to
 If you feel like you've encountered a bug not listed here, or the add-on lacks an important feature, [create a new issue here](https://github.com/sketchfab/blender-plugin/issues).
 
 To help us track a possible error, please try to append the logs of Blender's console in your message:
- 
+
 * On Windows, it is available through the menu **Window** -> **Toggle system console**
 * On OSX or Linux systems, you can access this data by [starting Blender from the command line](https://docs.blender.org/manual/en/dev/render/workflows/command_line.html). Outputs will then be printed in the shell from which you launched Blender.
