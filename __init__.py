@@ -23,7 +23,10 @@ import subprocess
 import tempfile
 import json
 import shutil
+import sys
 from uuid import UUID
+
+from .cached_login import CachedLogin
 
 import bpy
 import bpy.utils.previews
@@ -386,6 +389,7 @@ class SketchfabApi:
         self.prev_results_url = None
         self.user_orgs = []
         self.user_has_orgs = False
+        self.orgs_check_failed = False
         self.active_org = None
         self.use_org_profile = False
 
@@ -398,6 +402,19 @@ class SketchfabApi:
             self.headers = {}
 
     def login(self):
+        cached_login.cancel()
+        cached_login.reset_account()
+        token = get_sketchfab_login_props().api_token
+        if not token:
+            set_login_status('ERROR', 'Enter your API token')
+            return
+        try:
+            Cache.save_key('api_token', token)
+        except (OSError, ValueError, TypeError):
+            set_login_status('ERROR', 'Could not save the API token')
+            return
+        if cached_login.start(token):
+            return
         bpy.ops.wm.login_modal('INVOKE_DEFAULT')
 
     def is_user_logged(self):
@@ -407,6 +424,7 @@ class SketchfabApi:
         return len(self.plan_type) and self.plan_type not in ['basic', 'plus']
 
     def logout(self):
+        cached_login.cancel()
         # The panel field keeps its value so the user can log straight back in;
         # clearing headers is what marks the session as logged out.
         self.headers = {}
@@ -426,6 +444,7 @@ class SketchfabApi:
 
         self.user_orgs = []
         self.user_has_orgs = False
+        self.orgs_check_failed = False
         self.active_org = None
         self.use_org_profile = False
         props.use_org_profile = False
@@ -434,7 +453,7 @@ class SketchfabApi:
         bpy.ops.wm.sketchfab_search('EXEC_DEFAULT')
 
     def request_user_info(self):
-        requests.get(Config.SKETCHFAB_ME, headers=self.headers, hooks={'response': self.parse_user_info})
+        requests.get(Config.SKETCHFAB_ME, headers=self.headers, hooks={'response': self.parse_user_info}, timeout=(3, 10))
 
     def get_user_info(self):
         if self.display_name and self.plan_type:
@@ -448,7 +467,7 @@ class SketchfabApi:
             self.username = user_data['username']
             self.display_name = user_data['displayName']
             self.plan_type = user_data['account']
-            requests.get(Config.SKETCHFAB_ME + "/orgs", headers=self.headers, hooks={'response': self.on_user_orgs_check})
+            requests.get(Config.SKETCHFAB_ME + "/orgs", headers=self.headers, hooks={'response': self.on_user_orgs_check}, timeout=(3, 10))
         else:
             # Leave the rejected token in the panel field so it can be corrected.
             self.headers = {}
@@ -472,6 +491,7 @@ class SketchfabApi:
             pass
 
     def on_user_orgs_check(self, r, *args, **kargs):
+        self.orgs_check_failed = r.status_code != 200
         self.user_has_orgs = bool((r.status_code == 200) and len(r.json().get("results", [])))
 
     def parse_orgs_info(self, r, *args, **kargs):
@@ -761,8 +781,6 @@ class SketchfabLoginProps(bpy.types.PropertyGroup):
 
 def get_user_orgs(self, context):
     api  = get_sketchfab_props().skfb_api
-    if not api.user_has_orgs:
-        api.request_user_orgs()
     return [(org["uid"], org["displayName"], "") for org in api.user_orgs]
 
 def get_org_projects(self, context):
@@ -804,7 +822,7 @@ def refresh_orgs(self, context):
 
     if pprops.use_org_profile != props.use_org_profile:
         props.use_org_profile = pprops.use_org_profile
-    if pprops.active_org != props.active_org:
+    if api.user_orgs and pprops.active_org != props.active_org:
         props.active_org = pprops.active_org
 
     if props.use_org_profile:
@@ -986,7 +1004,7 @@ class SketchfabBrowserProps(bpy.types.PropertyGroup):
     has_searched_prev : BoolProperty(name='prev', default=False)
 
     skfb_api = SketchfabLoginProps.skfb_api
-    custom_icons = bpy.utils.previews.new()
+    custom_icons = None
     has_loaded_thumbnails : BoolProperty(default=False)
 
     is_latest_version : IntProperty(default=-1)
@@ -1272,6 +1290,7 @@ class LoginModal(bpy.types.Operator):
         return {'FINISHED'}
 
     def handle_token_login(self, api_token):
+        cached_login.cancel()
         browser_props = get_sketchfab_props()
         Cache.save_key('api_token', api_token)
 
@@ -1298,9 +1317,10 @@ class LoginModal(bpy.types.Operator):
             context.window_manager.modal_handler_add(self)
             login_props = get_sketchfab_login_props()
             self.handle_token_login(login_props.api_token)
-        except Exception as e:
+        except Exception:
+            get_sketchfab_props().skfb_api.headers = {}
             self.error = True
-            self.error_message = str(e)
+            self.error_message = 'Could not verify your Sketchfab account; please try again'
 
         return {'RUNNING_MODAL'}
 
@@ -1409,6 +1429,9 @@ class LoginPanel(View3DPanel, bpy.types.Panel):
             skfb_login = get_sketchfab_login_props()
             layout = self.layout.box().column(align=True)
             layout.enabled = get_plugin_enabled()
+            if cached_login.pending:
+                layout.label(text=skfb_login.status, icon='FILE_REFRESH')
+                return
             if skfb_login.skfb_api.is_user_logged():
                 login_row = layout.row()
                 login_row.label(text='Logged in as {}'.format(skfb_login.skfb_api.get_user_info()))
@@ -1437,7 +1460,10 @@ class TeamsPanel(View3DPanel, bpy.types.Panel):
 
         self.layout.enabled = get_plugin_enabled() and api.is_user_logged()
 
-        if not api.user_has_orgs:
+        if api.orgs_check_failed:
+            self.layout.label(text="Could not check organization membership", icon='ERROR')
+            self.layout.operator('wm.sketchfab_login', text='Retry').authenticate = True
+        elif not api.user_has_orgs:
             self.layout.label(text="You are not part of an organization", icon='INFO')
             self.layout.operator("wm.url_open", text='Learn about Sketchfab for Teams').url = "https://sketchfab.com/features/teams"
         else:
@@ -1836,22 +1862,23 @@ class SketchfabHelp(bpy.types.Operator):
 
 
 def activate_plugin():
+    cached_login.cancel()
     props = get_sketchfab_props()
     login_props = get_sketchfab_login_props()
 
-    # Restore the cached API token into the panel field, so it stays visible
-    # after Blender restarts; build_headers() then reads it back from there.
-    api_token = Cache.get_key('api_token')
-    if api_token:
-        login_props.api_token = api_token
-        props.skfb_api.build_headers()
-        props.skfb_api.request_user_info()
-
     global is_plugin_enabled
     is_plugin_enabled = True
+    try:
+        api_token = Cache.get_key('api_token')
+    except (OSError, ValueError, TypeError):
+        api_token = None
+        set_login_status('ERROR', 'Could not read the cached API token')
+    if isinstance(api_token, str) and api_token:
+        login_props.api_token = api_token
+        props.skfb_api.login()
 
     try:
-        requests.get(Config.SKETCHFAB_PLUGIN_VERSION, hooks={'response': check_plugin_version})
+        requests.get(Config.SKETCHFAB_PLUGIN_VERSION, hooks={'response': check_plugin_version}, timeout=(3, 10))
     except Exception as e:
         print('Error when checking for version: {}'.format(e))
 
@@ -2321,7 +2348,13 @@ def check_plugin_version(request, *args, **kwargs):
         print('Failed to retrieve plugin version')
         skfb.is_latest_version = -2
 
+cached_login = CachedLogin(sys.modules[__name__])
+
+
 def register():
+    global is_plugin_enabled
+    is_plugin_enabled = False
+    cached_login.reset_account()
     sketchfab_icon = bpy.utils.previews.new()
     icons_dir      = os.path.dirname(__file__)
     sketchfab_icon.load("skfb", os.path.join(icons_dir, "logo.png"), 'IMAGE')
@@ -2335,6 +2368,8 @@ def register():
 
     for cls in classes:
         bpy.utils.register_class(cls)
+
+    SketchfabBrowserProps.custom_icons = bpy.utils.previews.new()
 
     bpy.types.WindowManager.sketchfab_browser = PointerProperty(
                 type=SketchfabBrowserProps)
@@ -2356,6 +2391,8 @@ def register():
         updateCacheDirectory(None, context=bpy.context)
     except Exception as err:
         print("Sketchfab: failed to initialize cache directory during registration: {}".format(err))
+
+    cached_login.register()
 
 class SF_Attributions:
 
@@ -2395,6 +2432,11 @@ class SF_Attributions:
                 print(inner_err)
 
 def unregister():
+    global is_plugin_enabled
+    cached_login.unregister()
+    is_plugin_enabled = False
+    bpy.utils.previews.remove(SketchfabBrowserProps.custom_icons)
+    SketchfabBrowserProps.custom_icons = None
     for cls in classes:
         bpy.utils.unregister_class(cls)
 
