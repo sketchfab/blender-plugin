@@ -34,6 +34,8 @@ Your Sketchfab username should then be displayed upon successful login, and you 
 
 Please note that your API token is stored in a temporary file on your local machine (to automatically log you in when starting Blender). You can clear it by simply logging out of your Sketchfab account through the **Log Out** button.
 
+With a cached token, the add-on restores your login in the background without requiring **Activate add-on**. Startup does not run a model search; click the search button to browse. If automatic restoration is unavailable, use **Activate add-on**. Network failures keep the cached token so you can retry **Log in**; rejected tokens are removed from the cache.
+
 ### Organization members
 
 If you are a member of a [Sketchfab organization](https://sketchfab.com/3d-asset-management), you will be able to select the organization you belong to in the "Sketchfab for Teams" dropdown. Doing so will allow you to browse, import and export models from and to specific projects within your organization.
