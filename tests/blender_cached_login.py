@@ -6,6 +6,8 @@ import subprocess
 import sys
 import threading
 import time
+from types import SimpleNamespace
+from unittest.mock import patch
 
 import bpy
 
@@ -84,6 +86,16 @@ def tests():
     assert not addon.get_sketchfab_props().search_results
     assert addon.get_sketchfab_props().is_latest_version == -1
     checks.append('Cached account restored without search or update requests')
+
+    with patch.object(addon, 'requests', SimpleNamespace(get=unexpected_network)):
+        reset()
+        login.schedule_restore()
+        yield finished
+        assert api.is_user_logged()
+        api.login()
+        yield finished
+        assert api.is_user_logged()
+    checks.append('Cached and manual login work without requests.certs')
 
     reset(mode='organizations')
     login.schedule_restore()

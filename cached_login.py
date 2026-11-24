@@ -115,8 +115,15 @@ class CachedLogin:
         binary = self.interpreter()
         if binary is None:
             return False
+        certs = getattr(self.addon.requests, 'certs', None)
+        find_ca_bundle = getattr(certs, 'where', None)
+        if find_ca_bundle is None:
+            try:
+                from certifi import where as find_ca_bundle
+            except ImportError:
+                pass
         args = {'url': self.addon.Config.SKETCHFAB_ME, 'token': token,
-                'ca_file': self.addon.requests.certs.where()}
+                'ca_file': find_ca_bundle() if find_ca_bundle is not None else None}
         payload = json.dumps(args).encode('utf-8')
         # A bounded payload fits in an empty pipe without waiting for the child.
         if len(payload) > 4096:
