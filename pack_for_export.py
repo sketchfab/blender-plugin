@@ -150,12 +150,25 @@ def get_object_refs(ob):
 
 def prepare_assets(export_settings):
     visible = set(exported_objects(export_settings))
+    datablock_refs = {}
+    for target, owners in bpy.data.user_map(key_types={'OBJECT', 'COLLECTION', 'NODETREE'},
+                                            value_types={'OBJECT', 'NODETREE'}).items():
+        for owner in owners:
+            datablock_refs.setdefault(owner, set()).add(target)
+
     needed = set(visible)
     visit = list(visible)
     while visit:
-        dependencies = get_object_refs(visit.pop()) - needed
+        item = visit.pop()
+        dependencies = datablock_refs.get(item, set())
+        if isinstance(item, bpy.types.Object):
+            dependencies = dependencies | get_object_refs(item)
+        elif isinstance(item, bpy.types.Collection):
+            dependencies = dependencies | set(item.all_objects)
+        dependencies = dependencies - needed
         needed.update(dependencies)
         visit.extend(dependencies)
+    needed = {item for item in needed if isinstance(item, bpy.types.Object)}
     for scene in list(bpy.data.scenes):
         if scene != bpy.context.scene:
             bpy.data.scenes.remove(scene)

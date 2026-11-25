@@ -135,6 +135,28 @@ else:
     spline.points[0].co = (0, 0, 0, 1)
     spline.points[1].co = (1, 1, 1, 1)
     bpy.context.scene.collection.objects.link(bpy.data.objects.new('UnselectedCurve', curve))
+
+    bpy.ops.mesh.primitive_ico_sphere_add(subdivisions=1)
+    source_object = bpy.context.object
+    source_object.name = 'GeometrySource'
+    source_object.select_set(False)
+    cube.select_set(True)
+    bpy.context.view_layer.objects.active = cube
+
+    source_group = bpy.data.node_groups.new('Source Geometry', 'GeometryNodeTree')
+    source_group.outputs.new('NodeSocketGeometry', 'Geometry')
+    object_info = source_group.nodes.new('GeometryNodeObjectInfo')
+    object_info.inputs['Object'].default_value = source_object
+    output = source_group.nodes.new('NodeGroupOutput')
+    source_group.links.new(object_info.outputs['Geometry'], output.inputs['Geometry'])
+    geometry_group = bpy.data.node_groups.new('Export Geometry', 'GeometryNodeTree')
+    geometry_group.outputs.new('NodeSocketGeometry', 'Geometry')
+    nested = geometry_group.nodes.new('GeometryNodeGroup')
+    nested.node_tree = source_group
+    output = geometry_group.nodes.new('NodeGroupOutput')
+    geometry_group.links.new(nested.outputs['Geometry'], output.inputs['Geometry'])
+    cube.modifiers.new('Geometry Nodes', 'NODES').node_group = geometry_group
+
     all_visible = prepare(False)
     selection_only = prepare(True)
     for title, prepared in (('all-visible', all_visible), ('selection-only', selection_only)):
@@ -142,6 +164,10 @@ else:
         texture_states = {image.name: bool(image.packed_file) for image in bpy.data.images if image.source == 'FILE'}
         assert any(texture_states.values()), texture_states
         assert ('UnselectedCurve' in bpy.data.objects) == (title == 'all-visible')
+        exported_cube = bpy.data.objects['Cube'].evaluated_get(bpy.context.evaluated_depsgraph_get())
+        assert len(exported_cube.data.vertices) == 12
+        if title == 'selection-only':
+            assert bpy.data.objects['GeometrySource'].hide_render
         print_probe(title, {'textures_packed': texture_states, 'objects': [obj.name for obj in bpy.data.objects]})
 print_probe('complete', list(bpy.app.version))
 workspace.cleanup()
