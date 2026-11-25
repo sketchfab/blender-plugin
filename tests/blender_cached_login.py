@@ -140,7 +140,8 @@ def tests():
 
     addon.check_plugin_version([{'tag_name': '2.0.0', 'prerelease': True}, {'tag_name': '1.7.20'}])
     assert addon.get_sketchfab_props().is_latest_version == 1
-    addon.check_plugin_version([{'tag_name': 'v1.9.0'}])
+    major, minor, _ = addon.bl_info['version']
+    addon.check_plugin_version([{'tag_name': f'v{major}.{minor + 1}.0'}])
     assert addon.get_sketchfab_props().is_latest_version == 0
     checks.append('Version check ignores prereleases and compares numeric versions')
 
