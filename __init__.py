@@ -393,8 +393,25 @@ class SketchfabApi:
             if get_sketchfab_props_proxy().use_org_profile:
                 refresh_orgs(None, bpy.context)
 
-        queue_request('orgs', {'url': Config.SKETCHFAB_ME + '/orgs', 'orgs_url': Config.SKETCHFAB_ORGS},
-                      self.headers, apply)
+        queue_request('orgs', {'url': Config.SKETCHFAB_ME + '/orgs'}, self.headers, apply)
+
+    def request_org_projects(self):
+        org = self.active_org
+        if not (org and self.use_org_profile and self.is_user_logged()):
+            return
+        if org.get('projects_state') in {'loading', 'loaded'}:
+            return
+        org['projects_state'] = 'loading'
+
+        def apply(projects):
+            if projects is None:
+                org['projects_state'] = 'failed'
+            else:
+                org['projects'] = projects
+                org['projects_state'] = 'loaded'
+
+        url = f'{Config.SKETCHFAB_ORGS}/{org["uid"]}/projects'
+        queue_request('projects', {'url': url}, self.headers, apply)
 
     def request_model_info(self, model):
         model.info_requested = True
@@ -539,6 +556,8 @@ def refresh_orgs(self, context):
         pprops.sort_by = sort_by
     finally:
         pprops.is_refreshing = False
+    if api.use_org_profile and not api.active_org.get('projects_state'):
+        api.request_org_projects()
     refresh_search(self, context)
 
 
@@ -1095,9 +1114,28 @@ class TeamsPanel(View3DPanel, bpy.types.Panel):
 
             org_row = self.layout.row()
             org_row.prop(props, "active_org")
-            org_row.enabled = skfb.skfb_api.use_org_profile
+            org_row.enabled = api.use_org_profile
 
-            pprops = get_sketchfab_props()
+            if api.use_org_profile:
+                state = api.active_org.get('projects_state')
+                if state == 'loading':
+                    self.layout.label(text='Loading projects…', icon='TIME')
+                elif state == 'failed':
+                    self.layout.label(text='Could not load projects for this Team', icon='ERROR')
+                    self.layout.operator('wm.sketchfab_retry_projects', text='Retry project loading')
+                elif state == 'loaded' and not api.active_org['projects']:
+                    self.layout.label(text='No available projects', icon='INFO')
+
+
+class SketchfabRetryProjects(bpy.types.Operator):
+    bl_idname = 'wm.sketchfab_retry_projects'
+    bl_label = 'Retry loading Team projects'
+    bl_options = {'INTERNAL'}
+
+    def execute(self, context):
+        get_sketchfab_props().skfb_api.request_org_projects()
+        redraw_sketchfab()
+        return {'FINISHED'}
 
 class Model:
     def __init__(self, _uid):
@@ -1928,6 +1966,7 @@ classes = (
     SketchfabSearch,
     SketchfabSearchPreviousResults,
     SketchfabSearchNextResults,
+    SketchfabRetryProjects,
     ViewOnSketchfab,
     SketchfabDownloadModel,
     SketchfabLogger,

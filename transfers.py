@@ -65,8 +65,7 @@ def resolve_model(parameters, headers):
     org_name = parameters['organization']
     orgs = parameters['organizations']
     if org_name and orgs is None:
-        orgs = fetch_organizations(parameters['memberships_url'], parameters['orgs_url'],
-                                   lambda url: api_json(url, headers), include_projects=False)
+        orgs = fetch_organizations(parameters['memberships_url'], lambda url: api_json(url, headers))
     try:
         return model_endpoint(parameters['models_url'], parameters['orgs_url'], parameters['uid'], org_name, orgs or ())
     except ValueError as error:

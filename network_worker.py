@@ -15,7 +15,7 @@ sys.modules[package.__name__] = package
 
 from sketchfab_worker.login_worker import verify_login
 from sketchfab_worker.model_links import MODEL_UID
-from sketchfab_worker.organization_api import fetch_organizations
+from sketchfab_worker.organization_api import fetch_organizations, fetch_projects
 from sketchfab_worker.transfers import api_json, download_model, REQUEST_TIMEOUT, TransferError, upload_model
 
 
@@ -41,8 +41,9 @@ def run(directory, action, parameters, headers, password):
     if action == 'json':
         return {'data': api_json(parameters['url'], headers)}
     if action == 'orgs':
-        return {'data': fetch_organizations(parameters['url'], parameters['orgs_url'],
-                                            lambda url: api_json(url, headers))}
+        return {'data': fetch_organizations(parameters['url'], lambda url: api_json(url, headers))}
+    if action == 'projects':
+        return {'data': fetch_projects(parameters['url'], lambda url: api_json(url, headers))}
     if action == 'thumbnails':
         download_thumbnails(directory, parameters['thumbnails'])
         return {'data': None}

@@ -7,9 +7,13 @@ from urllib.parse import parse_qs, urlsplit
 MODEL_UID = 'fdecba9876543210fedcba9876543210'
 ORG_UID = '0123456789abcdef0123456789abcdef'
 PROJECT_UID = 'fedcba9876543210fedcba9876543210'
+SECOND_ORG_UID = '1' * 32
+SECOND_PROJECT_UID = '2' * 32
 
 
 class Handler(BaseHTTPRequestHandler):
+    second_project_requests = 0
+
     def log_message(self, *args):
         pass
 
@@ -51,6 +55,15 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(b'{"username":"redirected","displayName":"Redirected","account":"basic"}')
             return
+        if url.path == f'/fixture-teams/{SECOND_ORG_UID}/projects':
+            type(self).second_project_requests += 1
+            if self.second_project_requests == 1:
+                self.send_error(503)
+            else:
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(json.dumps({'results': [{'uid': SECOND_PROJECT_UID, 'name': 'Second project'}]}).encode())
+            return
         is_orgs = self.path.endswith('/orgs')
         status = 401 if mode == 'rejected' else 503 if mode == 'unavailable' or (mode == 'org-failure' and is_orgs) else 200
         self.send_response(status)
@@ -65,7 +78,8 @@ class Handler(BaseHTTPRequestHandler):
             payload = {'results': [{'uid': PROJECT_UID, 'name': 'Test project'}]}
         elif is_orgs:
             org = {'uid': ORG_UID, 'displayName': 'Test organization', 'username': 'test-org'}
-            payload = {'results': [org] if mode == 'organizations' else []}
+            second = {'uid': SECOND_ORG_UID, 'displayName': 'Test organization 2', 'username': 'second-org'}
+            payload = {'results': [org, second] if mode == 'organizations' else []}
         else:
             payload = {'username': 'probe', 'displayName': 'Probe', 'account': 'basic'}
             if mode == 'restricted':

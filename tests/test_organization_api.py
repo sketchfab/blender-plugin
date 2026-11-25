@@ -1,6 +1,6 @@
 import unittest
 
-from organization_api import fetch_organizations, unique_pages
+from organization_api import fetch_organizations, fetch_projects, unique_pages
 
 
 class OrganizationTests(unittest.TestCase):
@@ -14,15 +14,15 @@ class OrganizationTests(unittest.TestCase):
         responses = {
             memberships: {'results': [second], 'next': '?page=2'},
             memberships + '?page=2': {'results': [second, first]},
-            teams + '/first/projects': {'results': []},
             teams + '/second/projects': {'results': [project], 'next': '?page=2'},
             teams + '/second/projects?page=2': {'results': [project, {'uid': 'other', 'name': 'Other'}]},
         }
 
-        orgs = fetch_organizations(memberships, teams, responses.pop)
-        self.assertEqual(responses, {})
+        orgs = fetch_organizations(memberships, responses.pop)
         self.assertEqual([org['uid'] for org in orgs], ['first', 'second'])
-        self.assertEqual([item['uid'] for item in orgs[1]['projects']], ['other', 'project'])
+        projects = fetch_projects(teams + '/second/projects', responses.pop)
+        self.assertEqual([item['uid'] for item in projects], ['other', 'project'])
+        self.assertEqual(responses, {})
 
     def test_pagination_refuses_cycles_and_changes_of_origin(self):
         url = 'https://api.example.test/orgs'

@@ -145,35 +145,44 @@ def tests():
 
     org_uid = '0123456789abcdef0123456789abcdef'
     project_uid = 'fedcba9876543210fedcba9876543210'
-    with patch.object(api, 'search'), patch.object(addon.Config, 'SKETCHFAB_ORGS', base + '/fixture-teams'):
-        addon.get_sketchfab_props_proxy().use_org_profile = True
-        yield lambda: not api.orgs_loading
-    assert api.active_org['uid'] == org_uid and api.use_org_profile
-    assert addon.get_user_orgs(None, None)[0][0] == org_uid
-    assert project_uid in [item[0] for item in addon.get_available_search_domains(None, None)]
-    checks.append('Organization toggle still loads organizations and projects with the same token')
-
     second_org = '1' * 32
     second_project = '2' * 32
-    api.user_orgs.append({'uid': second_org, 'username': 'second-org', 'displayName': 'Second organization',
-                          'projects': [{'uid': second_project, 'name': 'Second project'}]})
     export = bpy.context.window_manager.sketchfab_export
-    export.active_project = project_uid
-    with patch.object(api, 'search'):
-        addon.get_sketchfab_props_proxy().active_org = second_org
-    assert export.active_project == 'NO_PROJECT'
-    try:
-        addon.capture_upload(bpy.context, api)
-    except ValueError as error:
-        assert 'Select a project' in str(error)
-    else:
-        raise AssertionError('A Team upload requires an explicitly selected project')
+    proxy = addon.get_sketchfab_props_proxy()
+    with patch.object(api, 'search'), patch.object(addon.Config, 'SKETCHFAB_ORGS', base + '/fixture-teams'):
+        proxy.use_org_profile = True
+        yield lambda: not addon.background_requests
+        assert api.active_org['uid'] == org_uid and api.use_org_profile
+        assert addon.get_user_orgs(None, None)[0][0] == org_uid
+        assert project_uid in [item[0] for item in addon.get_available_search_domains(None, None)]
+        assert not api.user_orgs[1].get('projects_state')
+        checks.append('Organization toggle loads memberships and the selected Team’s projects')
+
+        export.active_project = project_uid
+        proxy.active_org = second_org
+        assert export.active_project == 'NO_PROJECT'
+        yield lambda: not addon.background_requests
+        assert api.active_org['projects_state'] == 'failed'
+        assert api.orgs_loaded and api.use_org_profile and not api.orgs_check_failed
+        proxy.active_org = org_uid
+        assert project_uid in [item[0] for item in addon.get_available_search_domains(None, None)]
+        proxy.active_org = second_org
+        assert bpy.ops.wm.sketchfab_retry_projects() == {'FINISHED'}
+        yield lambda: not addon.background_requests
+        assert second_project in [item[0] for item in addon.get_available_search_domains(None, None)]
+        checks.append('A project failure is local to its Team and can be retried')
+
+        try:
+            addon.capture_upload(bpy.context, api)
+        except ValueError as error:
+            assert 'Select a project' in str(error)
+        else:
+            raise AssertionError('A Team upload requires an explicitly selected project')
     export.active_project = second_project
     (params, _, _), plan = addon.capture_upload(bpy.context, api)
     assert params['fields']['orgProject'] == second_project and plan == 'ent'
     checks.append('Switching Teams clears the upload project and requires a fresh selection')
 
-    proxy = addon.get_sketchfab_props_proxy()
     searches = []
     with patch.object(api, 'start_search', searches.append):
         proxy.use_org_profile = False
