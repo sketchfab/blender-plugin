@@ -69,7 +69,7 @@ When importing publicly available models, a text file named **sf_attributions** 
 
 You can choose to either export the currently selected model(s) or all visible models, and set some model properties, such as its title, description and tags.
 
-Use **Check File Size** to prepare the same file an upload would use and see its size without sending it to Sketchfab.
+The add-on uploads a ZIP when it is smaller than the exported model file. Use **Check File Size** to prepare and measure an upload locally. Separate exports of the same scene can differ in size.
 
 You can also choose to keep the exported model as a draft (unchecking the checkbox will directly publish the model), but only **PRO** users can set their models as Private, and optionnaly protect them with a password.
 

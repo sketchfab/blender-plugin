@@ -1768,12 +1768,15 @@ class ExportSketchfab(bpy.types.Operator):
                 for warning in self.prepared.get('warnings', []):
                     self.report({'WARNING'}, warning)
                 size = self.prepared['size']
+                size_label = Utils.humanify_size(size)
+                if self.prepared['filename'].endswith('.zip'):
+                    size_label += ' (ZIP)'
                 if self.upload_limit is not None and size > self.upload_limit:
                     self.report({'WARNING' if self.size_only else 'ERROR'},
-                                f'Packed file is {Utils.humanify_size(size)} and exceeds your '
+                                f'Upload file is {size_label} and exceeds your '
                                 f'{Utils.humanify_size(self.upload_limit)} upload limit')
                 elif self.size_only:
-                    self.report({'INFO'}, f'Packed file size is {Utils.humanify_size(size)}')
+                    self.report({'INFO'}, f'Upload file size is {size_label}')
                 else:
                     parameters, headers, password = self.upload
                     parameters.update(filepath=self.prepared['filepath'], filename=self.prepared['filename'])

@@ -19,9 +19,7 @@ import bpy
 import json
 import sys
 import time
-
-SKETCHFAB_EXPORT_TEMP_DIR = sys.argv[sys.argv.index('--') + 1]
-SKETCHFAB_EXPORT_DATA_FILE = os.path.join(SKETCHFAB_EXPORT_TEMP_DIR, "export-sketchfab.json")
+from zipfile import ZIP_DEFLATED, ZipFile
 
 # save a copy of the current blendfile
 def save_blend_copy():
@@ -202,6 +200,22 @@ def prepare_file(export_settings):
     prepare_assets(export_settings)
     return save_blend_copy()
 
+def smaller_upload(filepath, filename, size):
+    archive_path = os.path.splitext(filepath)[0] + '.zip'
+    try:
+        with ZipFile(archive_path, 'w', compression=ZIP_DEFLATED, compresslevel=6) as archive:
+            archive.write(filepath, arcname=filename)
+        archive_size = os.path.getsize(archive_path)
+        if archive_size < size:
+            return archive_path, os.path.basename(archive_path), archive_size
+    except (OSError, RuntimeError):
+        pass
+    try:
+        os.remove(archive_path)
+    except OSError:
+        pass
+    return filepath, filename, size
+
 def read_settings():
     with open(SKETCHFAB_EXPORT_DATA_FILE, 'r') as s:
         return json.load(s)
@@ -218,8 +232,11 @@ def write_result(filepath, filename, size, warnings):
 
 if __name__ == "__main__":
     try:
+        SKETCHFAB_EXPORT_TEMP_DIR = sys.argv[sys.argv.index('--') + 1]
+        SKETCHFAB_EXPORT_DATA_FILE = os.path.join(SKETCHFAB_EXPORT_TEMP_DIR, 'export-sketchfab.json')
         export_settings = read_settings()
         filepath, filename, size, warnings = prepare_file(export_settings)
+        filepath, filename, size = smaller_upload(filepath, filename, size)
         write_result(filepath, filename, size, warnings)
     except:
         import traceback

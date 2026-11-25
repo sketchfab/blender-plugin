@@ -4,6 +4,7 @@ from pathlib import Path
 import struct
 import sys
 import tempfile
+from zipfile import ZipFile
 
 import bpy
 
@@ -14,6 +15,12 @@ spec = importlib.util.spec_from_file_location('sketchfab_audit', repo / '__init_
 addon = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = addon
 spec.loader.exec_module(addon)
+from sketchfab_audit.pack_for_export import smaller_upload
+
+small_model = work / 'small.glb'
+small_model.write_bytes(b'model')
+assert smaller_upload(str(small_model), small_model.name, 5) == (str(small_model), small_model.name, 5)
+assert not small_model.with_suffix('.zip').exists()
 
 jobs = []
 
@@ -23,7 +30,16 @@ def prepare(selection):
     jobs.append(job)
     job.start(addon.save_upload_scene(job.directory, selection))
     job.process.wait(timeout=90)
-    return job.read_prepared_export()
+    prepared = job.read_prepared_export()
+    upload = Path(prepared['filepath'])
+    assert upload.suffix == '.zip'
+    with ZipFile(upload) as archive:
+        model, = archive.infolist()
+        assert model.filename == upload.with_suffix('.glb' if bpy.app.version >= (4, 0, 0) else '.blend').name
+        assert prepared['size'] == upload.stat().st_size < model.file_size
+        native_model = upload.with_name(model.filename)
+        assert archive.read(model) == native_model.read_bytes()
+    return {**prepared, 'filepath': str(native_model)}
 
 def read_glb(path):
     data = Path(path).read_bytes()

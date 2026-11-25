@@ -47,6 +47,7 @@ def start_import():
 
 
 def tests():
+    bpy.ops.mesh.primitive_grid_add(x_subdivisions=64, y_subdivisions=64)
     assert bpy.ops.wm.save_as_mainfile(filepath=str(original)) == {'FINISHED'}
     gltf = WORK / 'scene.gltf'
     assert bpy.ops.export_scene.gltf(filepath=str(gltf), export_format='GLTF_SEPARATE',
@@ -78,11 +79,26 @@ def tests():
     assert bpy.ops.wm.sketchfab_export() == {'RUNNING_MODAL'}
     job = addon.active_upload.job
     prepare_pid = job.process.pid
-    yield lambda: addon.active_upload is None
+    read_prepared_export = job.read_prepared_export
+    limit = None
+
+    def prepare_at_upload_limit():
+        nonlocal limit
+        prepared = read_prepared_export()
+        with ZipFile(prepared['filepath']) as archive:
+            source, = archive.infolist()
+        limit = prepared['size']
+        assert limit < source.file_size
+        addon.active_upload.upload_limit = limit
+        return prepared
+
+    with patch.object(job, 'read_prepared_export', prepare_at_upload_limit):
+        yield lambda: addon.active_upload is None
     assert job.process.pid != prepare_pid
-    assert json.loads((WORK / 'upload.json').read_text()) == {
-        'path': '/models', 'has_model': True, 'authenticated': True,
-    }
+    uploaded = json.loads((WORK / 'upload.json').read_text())
+    assert uploaded['path'] == '/models' and uploaded['authenticated']
+    assert uploaded['filename'].endswith('.zip') and uploaded['size'] == limit < uploaded['source_size']
+    assert uploaded['source_name'].endswith('.glb' if bpy.app.version >= (4, 0, 0) else '.blend')
     assert addon.uploaded_model_url.endswith(UID)
 
     api.use_org_profile = True

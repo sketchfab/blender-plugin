@@ -1,8 +1,12 @@
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from email import policy
+from email.parser import BytesParser
+from io import BytesIO
 import json
 from pathlib import Path
 import sys
 import time
+from zipfile import ZipFile
 
 
 WORK = Path(sys.argv[1])
@@ -48,7 +52,14 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         uploaded = self.rfile.read(int(self.headers['Content-Length']))
-        summary = {'path': self.path, 'has_model': b'modelFile' in uploaded,
+        header = f'Content-Type: {self.headers["Content-Type"]}\r\n\r\n'.encode('ascii')
+        message = BytesParser(policy=policy.default).parsebytes(header + uploaded)
+        model = next(part for part in message.iter_parts() if part.get_param('name', header='content-disposition') == 'modelFile')
+        data = model.get_payload(decode=True)
+        with ZipFile(BytesIO(data)) as archive:
+            source, = archive.infolist()
+        summary = {'path': self.path, 'filename': model.get_filename(), 'size': len(data),
+                   'source_name': source.filename, 'source_size': source.file_size,
                    'authenticated': self.headers.get('Authorization') == 'Token synthetic'}
         (WORK / 'upload.json').write_text(json.dumps(summary))
         body = json.dumps({'uid': UID}).encode()
