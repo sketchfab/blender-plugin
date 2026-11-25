@@ -13,7 +13,7 @@
 
 ## Installation
 
-To install the add-on, just download the **sketchfab-x-y-z.zip** file attached to the [latest release](https://github.com/sketchfab/blender-plugin/releases/latest), and install it as a regular blender add-on (User Preferences -> Add-ons -> Install from file).
+Download the **sketchfab-plugin-X-Y-Z.zip** asset from the [latest release](https://github.com/sketchfab/blender-plugin/releases/latest). In Blender, open **Edit > Preferences > Add-ons > Install from Disk** (**Install…** in older versions), select the ZIP without extracting it, and enable **Sketchfab Plugin**. If an older copy is enabled, disable it first.
 
 After installing the add-on, two optional settings are available:
 
@@ -68,6 +68,8 @@ When importing publicly available models, a text file named **sf_attributions** 
 ## Export a model to Sketchfab
 
 You can choose to either export the currently selected model(s) or all visible models, and set some model properties, such as its title, description and tags.
+
+Use **Check File Size** to prepare the same file an upload would use and see its size without sending it to Sketchfab.
 
 You can also choose to keep the exported model as a draft (unchecking the checkbox will directly publish the model), but only **PRO** users can set their models as Private, and optionnaly protect them with a password.
 
