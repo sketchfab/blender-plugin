@@ -152,6 +152,26 @@ def tests():
     assert project_uid in [item[0] for item in addon.get_available_search_domains(None, None)]
     checks.append('Organization toggle still loads organizations and projects with the same token')
 
+    second_org = '1' * 32
+    second_project = '2' * 32
+    api.user_orgs.append({'uid': second_org, 'username': 'second-org', 'displayName': 'Second organization',
+                          'projects': [{'uid': second_project, 'name': 'Second project'}]})
+    export = bpy.context.window_manager.sketchfab_export
+    export.active_project = project_uid
+    with patch.object(api, 'search'):
+        addon.get_sketchfab_props_proxy().active_org = second_org
+    assert export.active_project == 'NO_PROJECT'
+    try:
+        addon.capture_upload(bpy.context, api)
+    except ValueError as error:
+        assert 'Select a project' in str(error)
+    else:
+        raise AssertionError('A Team upload requires an explicitly selected project')
+    export.active_project = second_project
+    (params, _, _), plan = addon.capture_upload(bpy.context, api)
+    assert params['fields']['orgProject'] == second_project and plan == 'ent'
+    checks.append('Switching Teams clears the upload project and requires a fresh selection')
+
     reset(mode='org-failure')
     login.schedule_restore()
     yield finished

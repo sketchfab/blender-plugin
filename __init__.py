@@ -487,6 +487,9 @@ def get_org_projects(self, context):
     api  = get_sketchfab_props().skfb_api
     return [(proj["uid"], proj["name"], proj["name"]) for proj in api.active_org["projects"]] if api.active_org else []
 
+def get_upload_projects(self, context):
+    return [('NO_PROJECT', 'Select a project', ''), *get_org_projects(self, context)]
+
 def get_available_search_domains(self, context):
     api = get_sketchfab_props().skfb_api
 
@@ -514,8 +517,11 @@ def refresh_orgs(self, context):
         api.request_user_orgs()
         return
 
+    previous_org = api.active_org
     if api.user_orgs:
         api.active_org = next((org for org in api.user_orgs if org["uid"] == pprops.active_org), api.user_orgs[0])
+    if api.active_org is not previous_org:
+        context.window_manager.sketchfab_export.active_project = 'NO_PROJECT'
     api.use_org_profile = bool(pprops.use_org_profile and api.active_org)
     props.use_org_profile = api.use_org_profile
     if api.active_org:
@@ -1274,11 +1280,15 @@ class SketchfabExportPanel(View3DPanel, bpy.types.Panel):
         upload_label = "Reupload" if props.reuploadBoolean else "Upload"
         upload_icon  = "EXPORT"
         upload_enabled = api.is_user_logged() and context.mode == 'OBJECT'
+        needs_project = (api.use_org_profile and api.active_org and not props.reuploadBoolean
+                         and props.active_project in {'', 'NO_PROJECT'})
         if not upload_enabled:
             if not api.is_user_logged():
                 upload_label = "Log in to upload models"
             elif context.mode != 'OBJECT':
                 upload_label = "Export is only available in object mode"
+        elif needs_project:
+            upload_label = 'Select a project to upload'
         if active_upload is not None:
             if active_upload.prepared is None:
                 upload_label = 'Preparing model…'
@@ -1286,7 +1296,7 @@ class SketchfabExportPanel(View3DPanel, bpy.types.Panel):
                 size = Utils.humanify_size(active_upload.prepared['size'])
                 upload_label = f'Uploading {size}'
             upload_icon = 'TIME'
-        row.enabled = upload_enabled and active_upload is None
+        row.enabled = upload_enabled and not needs_project and active_upload is None
         row.operator("wm.sketchfab_export", icon=upload_icon, text=upload_label)
 
         row = layout.row()
@@ -1657,7 +1667,7 @@ class SketchfabExportProps(bpy.types.PropertyGroup):
             maxlen=1024)
     active_project : EnumProperty(
         name="Project",
-        items=get_org_projects,
+        items=get_upload_projects,
         description="Active project",
     )
 
@@ -1684,8 +1694,10 @@ def capture_upload(context, api):
         }
         password = props.password
         if is_team_upload:
+            if props.active_project in {'', 'NO_PROJECT'}:
+                raise ValueError('Select a project to upload to this Team')
             url = f'{Config.SKETCHFAB_ORGS}/{api.active_org["uid"]}/models'
-            fields['orgProject'] = props.active_project or ''
+            fields['orgProject'] = props.active_project
 
     parameters = model_request(api, uid, org_name)
     parameters.update({'method': method, 'url': url, 'fields': fields})
