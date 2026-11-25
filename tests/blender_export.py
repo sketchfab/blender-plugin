@@ -4,6 +4,7 @@ from pathlib import Path
 import struct
 import sys
 import tempfile
+import threading
 
 import bpy
 
@@ -16,8 +17,11 @@ sys.modules[spec.name] = addon
 spec.loader.exec_module(addon)
 
 def prepare(selection):
-    directory = tempfile.mkdtemp(dir=str(work))
-    return addon.prepare_upload_file(directory, selection)
+    from sketchfab_audit.transfers import pack_scene
+
+    directory = Path(tempfile.mkdtemp(dir=work))
+    command = addon.save_upload_scene(directory, selection)
+    return pack_scene(command, directory, threading.Event())
 
 def read_glb(path):
     data = Path(path).read_bytes()

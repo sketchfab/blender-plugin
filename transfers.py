@@ -1,5 +1,6 @@
 import json
 import shutil
+import subprocess
 import tempfile
 import threading
 from pathlib import Path
@@ -7,6 +8,8 @@ from urllib.parse import unquote, urlsplit
 from zipfile import BadZipFile, ZipFile
 
 import requests
+from urllib3.fields import RequestField
+from urllib3.filepost import choose_boundary, encode_multipart_formdata
 
 from .model_links import model_endpoint
 from .organization_api import fetch_organizations
@@ -164,3 +167,109 @@ class DownloadJob(threading.Thread):
                 discard = self.cancelled.is_set() or self.path is None
             if discard:
                 self.cleanup()
+
+
+class MultipartUpload:
+    def __init__(self, model, filepath, filename, fields, cancelled):
+        boundary = choose_boundary()
+        self.content_type = f'multipart/form-data; boundary={boundary}'
+        closing_boundary = f'--{boundary}--\r\n'.encode()
+        self.epilogue = b'\r\n' + closing_boundary
+        prefix, _ = encode_multipart_formdata(
+            [(name, str(value)) for name, value in fields.items()], boundary=boundary)
+        attachment = RequestField('modelFile', None, filename=filename)
+        attachment.make_multipart(content_type='application/octet-stream')
+        self.preamble = prefix[:-len(closing_boundary)] + f'--{boundary}\r\n'.encode() + attachment.render_headers().encode()
+        self.model = model
+        self.size = filepath.stat().st_size
+        self.cancelled = cancelled
+
+    def __len__(self):
+        return len(self.preamble) + self.size + len(self.epilogue)
+
+    def __iter__(self):
+        check_cancelled(self.cancelled)
+        yield self.preamble
+        while True:
+            check_cancelled(self.cancelled)
+            data = self.model.read(CHUNK_SIZE)
+            if not data:
+                break
+            yield data
+        check_cancelled(self.cancelled)
+        yield self.epilogue
+
+
+def send_model(filepath, filename, method, url, headers, fields, uid, cancelled):
+    with filepath.open('rb') as model:
+        body = MultipartUpload(model, filepath, filename, fields, cancelled)
+        with requests.request(method, url, data=body, headers={**headers, 'Content-Type': body.content_type},
+                              timeout=REQUEST_TIMEOUT, allow_redirects=False) as response:
+            if response.status_code not in {200, 201, 204}:
+                raise UploadError(f'Sketchfab upload failed (HTTP {response.status_code})')
+            check_cancelled(cancelled)
+            try:
+                uploaded_uid = response.json().get('uid')
+            except (ValueError, AttributeError):
+                uploaded_uid = None
+            return uploaded_uid or uid
+
+
+class UploadError(Exception):
+    pass
+
+
+def pack_scene(command, directory, cancelled):
+    check_cancelled(cancelled)
+    with subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                          stderr=subprocess.DEVNULL) as process:
+        try:
+            while process.poll() is None:
+                if cancelled.wait(0.1):
+                    raise TransferCancelled()
+        finally:
+            if process.poll() is None:
+                try:
+                    process.kill()
+                except ProcessLookupError:
+                    pass
+        if process.returncode:
+            raise UploadError(f'Background Blender could not prepare the file (exit {process.returncode})')
+    check_cancelled(cancelled)
+    with (directory / 'export-sketchfab.json').open(encoding='utf-8') as settings:
+        result = json.load(settings)
+    path = Path(result['filepath']).resolve()
+    if (path.parent != directory.resolve() or path.name != result['filename']
+            or path.stat().st_size != result['size']):
+        raise UploadError('Background Blender returned an invalid export file')
+    return result
+
+
+class UploadJob(threading.Thread):
+    def __init__(self, directory, command, upload_limit, send=None):
+        super().__init__(daemon=True)
+        self.directory = directory
+        self.command = command
+        self.upload_limit = upload_limit
+        self.send = send
+        self.cancelled = threading.Event()
+        self.prepared = None
+        self.model_uid = None
+        self.error = None
+
+    def run(self):
+        try:
+            self.prepared = pack_scene(self.command, self.directory, self.cancelled)
+            check_cancelled(self.cancelled)
+            if self.send is not None and (self.upload_limit is None or self.prepared['size'] <= self.upload_limit):
+                self.model_uid = self.send(Path(self.prepared['filepath']), self.prepared['filename'], self.cancelled)
+        except TransferCancelled:
+            pass
+        except UploadError as error:
+            self.error = str(error)
+        except requests.exceptions.RequestException:
+            self.error = 'Could not reach Sketchfab to upload the model'
+        except (OSError, ValueError, KeyError, TypeError):
+            self.error = 'Could not prepare the Sketchfab upload file'
+        finally:
+            shutil.rmtree(self.directory, ignore_errors=True)

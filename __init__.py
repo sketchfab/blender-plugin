@@ -20,17 +20,17 @@ import requests
 import threading
 import time
 from collections import OrderedDict
-import subprocess
 import tempfile
 import json
 import shutil
+from pathlib import Path
 import sys
 from urllib.parse import quote_plus
 
 from .cached_login import CachedLogin
 from .model_links import MODEL_UID, model_endpoint, parse_model_link
 from .organization_api import fetch_organizations
-from .transfers import DownloadJob
+from .transfers import (DownloadJob, UploadError, UploadJob, api_json, check_cancelled, send_model)
 
 import bpy
 import bpy.utils.previews
@@ -63,6 +63,8 @@ PLUGIN_VERSION = str(bl_info['version']).strip('() ').replace(',', '.')
 preview_collection = {}
 thumbnail_requests = {}
 active_download = None
+active_upload = None
+uploaded_model_url = ''
 is_plugin_enabled = False
 
 
@@ -1352,7 +1354,7 @@ class SketchfabExportPanel(View3DPanel, bpy.types.Panel):
             col.prop(props, "reuploadPath")
 
         # Project selection if member of an org
-        if api.active_org and api.use_org_profile:
+        if api.active_org and api.use_org_profile and not props.reuploadBoolean:
             row = layout.row()
             row.prop(props, "active_project")
 
@@ -1367,19 +1369,22 @@ class SketchfabExportPanel(View3DPanel, bpy.types.Panel):
                 upload_label = "Log in to upload models"
             elif context.mode != 'OBJECT':
                 upload_label = "Export is only available in object mode"
-        if sf_state.uploading:
-            upload_label = "Uploading %s" % sf_state.size_label
-            upload_icon  = "SORTTIME"
-        row.enabled = upload_enabled and not sf_state.uploading
+        if active_upload is not None:
+            if active_upload.job.prepared is None:
+                upload_label = 'Preparing model…'
+            else:
+                size = Utils.humanify_size(active_upload.job.prepared['size'])
+                upload_label = f'Uploading {size}'
+            upload_icon = 'TIME'
+        row.enabled = upload_enabled and active_upload is None
         row.operator("wm.sketchfab_export", icon=upload_icon, text=upload_label)
 
         row = layout.row()
-        row.enabled = context.mode == 'OBJECT' and not sf_state.uploading
+        row.enabled = context.mode == 'OBJECT' and active_upload is None
         row.operator("wm.sketchfab_export", text="Check File Size").size_only = True
 
-        model_url = sf_state.model_url
-        if model_url:
-            layout.operator("wm.url_open", text="View Online Model", icon='URL').url = model_url
+        if uploaded_model_url:
+            layout.operator("wm.url_open", text="View Online Model", icon='URL').url = uploaded_model_url
 
 class SketchfabLogger(bpy.types.Operator):
     """Log in / out your Sketchab.com account"""
@@ -1737,125 +1742,65 @@ class SketchfabExportProps(bpy.types.PropertyGroup):
     )
 
 
-class _SketchfabState:
-    """Singleton to store state"""
-    __slots__ = (
-        "uploading",
-        "size_label",
-        "model_url",
-        "report_message",
-        "report_type",
-        )
-
-    def __init__(self):
-        self.uploading = False
-        self.size_label = ""
-        self.model_url = ""
-        self.report_message = ""
-        self.report_type = ''
-
-sf_state = _SketchfabState()
-del _SketchfabState
-
-def upload_report(report_message, report_type):
-    sf_state.report_message = report_message
-    sf_state.report_type = report_type
-
-# upload the blend-file to sketchfab
-def upload(filepath, filename):
-
-    props = get_sketchfab_props()
-    api   = props.skfb_api
-
-    wm = bpy.context.window_manager
-    props = wm.sketchfab_export
-
-    title = props.title
-    if not title:
-        title = os.path.splitext(os.path.basename(bpy.data.filepath))[0]
-
-    # Limit the number of tags to 42
-    props.tags = " ".join(props.tags.split(" ")[:42])
-
-    _data = {
-        "name": title,
-        "description": props.description,
-        "tags": props.tags,
-        "private": props.private,
-        "isPublished": not props.draft,
-        "password": props.password,
-        "source": "blender-exporter",
-    }
-
-    _headers = api.headers
-
-    uploadUrl = ""
-    modelUid  = ""
-    requestFunction = requests.post
-
-    # Are we reuploading ?
+def capture_upload(context, api):
+    props = context.window_manager.sketchfab_export
+    headers = api.headers.copy()
+    models_url, orgs_url = Config.SKETCHFAB_MODEL, Config.SKETCHFAB_ORGS
+    memberships_url = Config.SKETCHFAB_ME + '/orgs'
+    orgs = tuple(api.user_orgs) if api.orgs_loaded else None
+    uid = org_name = None
+    method = 'POST'
+    url = models_url
+    is_team_upload = bool(api.use_org_profile and api.active_org)
     if props.reuploadBoolean:
-
-        requestFunction = requests.put
-
-        try:
-            modelUid, organization = parse_model_link(props.reuploadPath)
-            if organization:
-                api.request_user_orgs()
-            uploadUrl = model_endpoint(Config.SKETCHFAB_MODEL, Config.SKETCHFAB_ORGS, modelUid,
-                                       organization, api.user_orgs)
-        except ValueError as error:
-            return upload_report(str(error), 'ERROR')
-
-        _data = {
-            "uid" : modelUid,
-            "source": "blender-exporter"
+        uid, org_name = parse_model_link(props.reuploadPath)
+        method = 'PUT'
+        fields = {'uid': uid, 'source': 'blender-exporter'}
+        is_team_upload = org_name is not None
+    else:
+        fields = {
+            'name': props.title or Path(bpy.data.filepath).stem,
+            'description': props.description,
+            'tags': ' '.join(props.tags.split()[:42]),
+            'private': props.private,
+            'isPublished': not props.draft,
+            'password': props.password,
+            'source': 'blender-exporter',
         }
+        if is_team_upload:
+            url = f'{orgs_url}/{api.active_org["uid"]}/models'
+            fields['orgProject'] = props.active_project or ''
 
-    else:
+    def send(filepath, filename, cancelled):
+        endpoint = url
+        if uid is not None:
+            teams = orgs
+            if org_name and teams is None:
+                def fetch(page):
+                    check_cancelled(cancelled)
+                    return api_json(page, headers)
 
-        # Org or not
-        if api.user_has_orgs and api.use_org_profile:
-            uploadUrl = "%s/%s/models" % (Config.SKETCHFAB_ORGS, api.active_org["uid"])
-            _data["orgProject"] = props.active_project
-        else:
-            uploadUrl = Config.SKETCHFAB_MODEL
+                teams = fetch_organizations(memberships_url, orgs_url, fetch, include_projects=False)
+            try:
+                endpoint = model_endpoint(models_url, orgs_url, uid, org_name, teams or ())
+            except ValueError as error:
+                raise UploadError(str(error)) from error
+        return send_model(filepath, filename, method, endpoint, headers, fields, uid, cancelled)
 
-    # Upload and parse the result
-    try:
-        print("Uploading to %s" % uploadUrl)
-        with open(filepath, 'rb') as model_file:
-            r = requestFunction(uploadUrl, data=_data, files={"modelFile": (filename, model_file)}, headers=_headers)
-    except (OSError, requests.exceptions.RequestException) as e:
-        return upload_report("Upload failed. Error: %s" % str(e), 'WARNING')
-
-    if r.status_code not in [requests.codes.ok, requests.codes.created, requests.codes.no_content]:
-        return upload_report("Upload failed. Error code: %s\nMessage:\n%s" % (str(r.status_code), str(r)), 'WARNING')
-    else:
-        try:
-            result = r.json()
-            sf_state.model_url = Config.SKETCHFAB_URL + "/models/" + result["uid"]
-        except:
-            sf_state.model_url = Config.SKETCHFAB_URL + "/models/" + modelUid
-        return upload_report("Upload complete. Available on your sketchfab.com dashboard.", 'INFO')
+    return send, 'ent' if is_team_upload else api.plan_type
 
 
-def prepare_upload_file(directory, selection):
-    extension = os.path.splitext(bpy.data.filepath)[1] or '.blend'
-    scene_path = os.path.join(directory, 'export-sketchfab' + extension)
-    settings_path = os.path.join(directory, 'export-sketchfab.json')
-    script_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'pack_for_export.py')
+def save_upload_scene(directory, selection):
+    scene_path = directory / 'export-sketchfab.blend'
+    settings_path = directory / 'export-sketchfab.json'
+    script_path = Path(__file__).resolve().with_name('pack_for_export.py')
 
-    bpy.ops.wm.save_as_mainfile(filepath=scene_path, compress=True, copy=True)
-    with open(settings_path, 'w') as settings:
+    if 'FINISHED' not in bpy.ops.wm.save_as_mainfile(filepath=str(scene_path), compress=True, copy=True):
+        raise RuntimeError('Blender cancelled saving the export copy')
+    with settings_path.open('w', encoding='utf-8') as settings:
         json.dump({'selection': selection}, settings)
-    subprocess.check_call([bpy.app.binary_path, '--background', '-noaudio', scene_path,
-                           '--python', script_path, '--', directory])
-    os.remove(scene_path)
-    with open(settings_path) as settings:
-        prepared = json.load(settings)
-    os.remove(settings_path)
-    return prepared
+    return [bpy.app.binary_path, '--background', '--factory-startup', '-noaudio', str(scene_path),
+            '--python-exit-code', '1', '--python', str(script_path), '--', str(directory)]
 
 
 class ExportSketchfab(bpy.types.Operator):
@@ -1863,28 +1808,17 @@ class ExportSketchfab(bpy.types.Operator):
     bl_label = "Upload"
 
     size_only : BoolProperty(default=False, options={'SKIP_SAVE'})
-    _timer = None
-    _thread = None
-    _tempdir = None
 
     @classmethod
     def description(cls, context, properties):
         if properties.size_only:
-            return 'Prepare the upload file and show its size without sending it to Sketchfab'
+            return 'Prepare the upload file and show its size'
         return 'Upload your model to Sketchfab'
 
-    def modal(self, context, event):
-        if event.type == 'TIMER' and not self._thread.is_alive():
-            self.finish_upload(context.window_manager)
-            if context.area:
-                context.area.tag_redraw()
-            self.report({sf_state.report_type}, sf_state.report_message)
-            return {'FINISHED'}
-        return {'PASS_THROUGH'}
-
     def execute(self, context):
-        if sf_state.uploading:
-            self.report({'WARNING'}, "Please wait till current upload is finished")
+        global active_upload, uploaded_model_url
+        if active_upload is not None:
+            self.report({'WARNING'}, 'Wait for the current export to finish')
             return {'CANCELLED'}
         if context.mode != 'OBJECT':
             self.report({'WARNING'}, 'Export is only available in Object Mode')
@@ -1893,55 +1827,82 @@ class ExportSketchfab(bpy.types.Operator):
         if not self.size_only and not api.is_user_logged():
             self.report({'WARNING'}, 'Log in to upload models')
             return {'CANCELLED'}
-        wm = context.window_manager
-        tempdir = None
+
+        self.wm = context.window_manager
+        self.timer = None
+        directory = None
+        self.job = None
         try:
-            tempdir = tempfile.mkdtemp()
-            prepared = prepare_upload_file(tempdir, wm.sketchfab_export.selection)
-            size = prepared['size']
-            size_label = Utils.humanify_size(size)
-            for warning in prepared.get('warnings', []):
-                self.report({'WARNING'}, warning)
-
-            plan = 'ent' if api.use_org_profile else api.plan_type
-            upload_limit = Config.SKETCHFAB_UPLOAD_LIMITS.get(plan)
-            if upload_limit is not None and size > upload_limit:
-                limit = Utils.humanify_size(upload_limit)
-                self.report({'WARNING' if self.size_only else 'ERROR'},
-                            f'Packed file is {size_label} and exceeds your {limit} upload limit')
-                return {'FINISHED'}
             if self.size_only:
-                self.report({'INFO'}, f'Packed file size is {size_label}')
-                return {'FINISHED'}
+                send = None
+                plan = 'ent' if api.use_org_profile else api.plan_type
+            else:
+                send, plan = capture_upload(context, api)
+            directory = Path(tempfile.mkdtemp(prefix='sketchfab-export-'))
+            command = save_upload_scene(directory, self.wm.sketchfab_export.selection)
+            self.job = UploadJob(directory, command, Config.SKETCHFAB_UPLOAD_LIMITS.get(plan), send)
+            self.timer = self.wm.event_timer_add(0.2, window=context.window)
+            self.job.start()
+            self.wm.modal_handler_add(self)
+        except (OSError, ValueError, RuntimeError) as error:
+            self.cancel(context)
+            if directory is not None and (self.job is None or not self.job.ident):
+                shutil.rmtree(directory, ignore_errors=True)
+            self.report({'ERROR'}, str(error))
+            return {'CANCELLED'}
 
-            sf_state.model_url = ''
-            sf_state.size_label = size_label
-            upload_report('Upload failed', 'ERROR')
-            self._tempdir = tempdir
-            self._thread = threading.Thread(target=upload, args=(prepared['filepath'], prepared['filename']))
-            self._timer = wm.event_timer_add(1.0, window=context.window)
-            wm.modal_handler_add(self)
-            self._thread.start()
-            sf_state.uploading = True
-            return {'RUNNING_MODAL'}
-        except Exception as e:
-            self.report({'WARNING'}, f'Could not prepare the upload file ({e})')
-            return {'FINISHED'}
-        finally:
-            if not sf_state.uploading:
-                if self._timer is not None:
-                    wm.event_timer_remove(self._timer)
-                if tempdir is not None:
-                    shutil.rmtree(tempdir, ignore_errors=True)
+        if not self.size_only:
+            uploaded_model_url = ''
+        active_upload = self
+        redraw_sketchfab()
+        return {'RUNNING_MODAL'}
 
-    def finish_upload(self, wm):
-        self._thread.join()
-        shutil.rmtree(self._tempdir, ignore_errors=True)
-        wm.event_timer_remove(self._timer)
-        sf_state.uploading = False
+    def modal(self, context, event):
+        global uploaded_model_url
+        if active_upload is not self:
+            return {'CANCELLED'}
+        if event.type == 'ESC':
+            self.cancel(context)
+            return {'CANCELLED'}
+        if event.type != 'TIMER':
+            return {'PASS_THROUGH'}
+        if self.job.is_alive():
+            redraw_sketchfab()
+            return {'PASS_THROUGH'}
+
+        self.cancel(context)
+        if self.job.error:
+            self.report({'ERROR'}, self.job.error)
+            return {'CANCELLED'}
+        prepared = self.job.prepared
+        for warning in prepared.get('warnings', []):
+            self.report({'WARNING'}, warning)
+        size = Utils.humanify_size(prepared['size'])
+        limit = self.job.upload_limit
+        if limit is not None and prepared['size'] > limit:
+            self.report({'WARNING' if self.size_only else 'ERROR'},
+                        f'Packed file is {size} and exceeds your {Utils.humanify_size(limit)} upload limit')
+            return {'FINISHED' if self.size_only else 'CANCELLED'}
+        if self.size_only:
+            self.report({'INFO'}, f'Packed file size is {size}')
+        else:
+            if isinstance(self.job.model_uid, str) and MODEL_UID.fullmatch(self.job.model_uid):
+                uploaded_model_url = f'{Config.SKETCHFAB_URL}/models/{self.job.model_uid}'
+            self.report({'INFO'}, 'Upload complete. Available on your sketchfab.com dashboard.')
+        redraw_sketchfab()
+        return {'FINISHED'}
 
     def cancel(self, context):
-        self.finish_upload(context.window_manager)
+        global active_upload
+        if active_upload is self:
+            active_upload = None
+        if self.timer is not None:
+            self.wm.event_timer_remove(self.timer)
+            self.timer = None
+        if self.job is not None:
+            self.job.cancelled.set()
+        redraw_sketchfab()
+
 
 def get_temporary_path():
 
@@ -2161,8 +2122,12 @@ def record_download(metadata, uid, title):
 
 @bpy.app.handlers.persistent
 def cancel_transfers(*args):
+    global uploaded_model_url
     if active_download is not None:
         active_download.cancel(bpy.context)
+    if active_upload is not None:
+        active_upload.cancel(bpy.context)
+    uploaded_model_url = ''
 
 
 def unregister():
