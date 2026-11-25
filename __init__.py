@@ -24,6 +24,7 @@ import tempfile
 import json
 import shutil
 import sys
+from urllib.parse import quote_plus
 from uuid import UUID
 
 from .cached_login import CachedLogin
@@ -57,8 +58,7 @@ bl_info['blender'] = getattr(bpy.app, "version")
 
 PLUGIN_VERSION = str(bl_info['version']).strip('() ').replace(',', '.')
 preview_collection = {}
-thumbnailsProgress = set([])
-ongoingSearches = set([])
+thumbnail_requests = {}
 is_plugin_enabled = False
 
 
@@ -332,8 +332,17 @@ def get_sketchfab_model(uid):
         return None
 
 def run_default_search():
-    searchthr = GetRequestThread(Config.DEFAULT_SEARCH, parse_results)
-    searchthr.start()
+    api = get_sketchfab_props().skfb_api
+    api.start_search(Config.DEFAULT_SEARCH + api.restricted_search_filter())
+
+
+def redraw_sketchfab():
+    wm = bpy.context.window_manager
+    if wm is not None:
+        for window in wm.windows:
+            for area in window.screen.areas:
+                if area.type == 'VIEW_3D':
+                    area.tag_redraw()
 
 
 def get_plugin_enabled():
@@ -352,9 +361,6 @@ def refresh_search(self, context):
         props.search_domain = pprops.search_domain
     if pprops.sort_by != props.sort_by:
         props.sort_by = pprops.sort_by
-
-    if 'current' in props.search_results:
-        del props.search_results['current']
 
     props.query = pprops.query
     props.animated = pprops.animated
@@ -385,8 +391,11 @@ class SketchfabApi:
         self.username = ''
         self.display_name = ''
         self.plan_type = ''
+        self.allows_restricted = False
         self.next_results_url = None
         self.prev_results_url = None
+        self.search_request = None
+        self.search_error = ''
         self.user_orgs = []
         self.user_has_orgs = False
         self.orgs_check_failed = False
@@ -425,9 +434,7 @@ class SketchfabApi:
 
     def logout(self):
         cached_login.cancel()
-        # The panel field keeps its value so the user can log straight back in;
-        # clearing headers is what marks the session as logged out.
-        self.headers = {}
+        cached_login.reset_account()
         Cache.delete_key('api_token')
         # Versions up to 1.6.1 cached an OAuth 'access_token' and the account
         # email under 'username'. Neither is written any more, but purge both so
@@ -436,17 +443,7 @@ class SketchfabApi:
         Cache.delete_key('username')
 
         props = get_sketchfab_props()
-        #props.search_domain = "DEFAULT"
-        if 'current' in props.search_results:
-            del props.search_results['current']
         pprops = get_sketchfab_props_proxy()
-        #pprops.search_domain = "DEFAULT"
-
-        self.user_orgs = []
-        self.user_has_orgs = False
-        self.orgs_check_failed = False
-        self.active_org = None
-        self.use_org_profile = False
         props.use_org_profile = False
         pprops.use_org_profile = False
 
@@ -467,6 +464,7 @@ class SketchfabApi:
             self.username = user_data['username']
             self.display_name = user_data['displayName']
             self.plan_type = user_data['account']
+            self.allows_restricted = user_data.get('allowsRestricted') is True
             requests.get(Config.SKETCHFAB_ME + "/orgs", headers=self.headers, hooks={'response': self.on_user_orgs_check}, timeout=(3, 10))
         else:
             # Leave the rejected token in the panel field so it can be corrected.
@@ -560,13 +558,13 @@ class SketchfabApi:
             if orgs_data["next"] is not None:
                 requests.get(orgs_data["next"], headers=self.headers, hooks={'response': self.parse_orgs_info})
 
-    def request_thumbnail(self, thumbnails_json, model_uid):
-        # Avoid requesting twice the same data
-        if model_uid not in thumbnailsProgress:
-            thumbnailsProgress.add(model_uid)
+    def request_thumbnail(self, thumbnails_json, path):
+        if path not in thumbnail_requests and not os.path.isfile(path):
             url = Utils.get_thumbnail_url(thumbnails_json)
-            thread = ThumbnailCollector(url)
-            thread.start()
+            if url:
+                request = ThumbnailCollector(url)
+                thumbnail_requests[path] = request
+                request.start()
 
     def request_model_info(self, uid, callback=None):
         callback = self.handle_model_info if callback is None else callback
@@ -594,7 +592,19 @@ class SketchfabApi:
         model.animated = 'Yes ({} animation(s))'.format(anim_count) if anim_count > 0 else 'No'
         skfb.search_results['current'][uid] = model
 
-    def search(self, query, search_cb):
+    def restricted_search_filter(self):
+        return '&restricted=1' if self.is_user_logged() and self.allows_restricted else ''
+
+    def reset_search(self):
+        self.search_request = None
+        self.search_error = ''
+        self.next_results_url = None
+        self.prev_results_url = None
+        thumbnail_requests.clear()
+        if getattr(bpy.context.window_manager, 'sketchfab_browser', None) is not None:
+            clear_search()
+
+    def search(self, query):
         skfb = get_sketchfab_props()
         url = Config.BASE_SEARCH
         if skfb.search_domain == "OWN":
@@ -606,14 +616,17 @@ class SketchfabApi:
         elif len(skfb.search_domain) == 32:
             url = Config.SKETCHFAB_ORGS + "/%s/models?isArchivesReady=true&projects=%s" % (self.active_org["uid"], skfb.search_domain)
 
-        search_query = '{}{}'.format(url, query)
-        if search_query not in ongoingSearches:
-            ongoingSearches.add(search_query)
-            searchthr = GetRequestThread(search_query, search_cb, self.headers)
-            searchthr.start()
+        if skfb.search_domain in {'DEFAULT', 'OWN'}:
+            query += self.restricted_search_filter()
+        self.start_search(url + query)
 
-    def search_cursor(self, url, search_cb):
-        requests.get(url, headers=self.headers, hooks={'response': search_cb})
+    def start_search(self, url):
+        self.search_error = ''
+        self.search_request = SearchRequest(url, self.headers)
+        self.search_request.start()
+        if not bpy.app.timers.is_registered(poll_search):
+            bpy.app.timers.register(poll_search, first_interval=0.05)
+        redraw_sketchfab()
 
     def write_model_info(self, title, author, authorUrl, license, uid):
         try:
@@ -1149,7 +1162,7 @@ def import_model(gltf_path, uid, title):
 
 
 def build_search_request(query, pbr, animated, staffpick, face_count, category, sort_by):
-    final_query = '&q={}'.format(query) if query else ''
+    final_query = '&q={}'.format(quote_plus(query)) if query else ''
 
     if animated:
         final_query = final_query + '&animated=true'
@@ -1184,96 +1197,91 @@ def build_search_request(query, pbr, animated, staffpick, face_count, category, 
     return final_query
 
 
-def parse_results(r, *args, **kwargs):
+class SearchRequest(threading.Thread):
+    def __init__(self, url, headers):
+        super().__init__(daemon=True)
+        self.url = url
+        self.headers = headers
+        self.results = None
 
-    ongoingSearches.discard(r.url)
+    def run(self):
+        try:
+            response = requests.get(self.url, headers=self.headers, timeout=(3, 10))
+            response.raise_for_status()
+            self.results = response.json()
+        except (requests.exceptions.RequestException, ValueError):
+            pass
 
+
+def poll_search():
     skfb = get_sketchfab_props()
-    json_data = r.json()
+    api = skfb.skfb_api
+    request = api.search_request
+    if request is None:
+        return None
+    if request.is_alive():
+        return 0.05
+    api.search_request = None
 
-    if 'current' in skfb.search_results:
-        skfb.search_results['current'].clear()
-        del skfb.search_results['current']
+    try:
+        results = request.results
+        if not isinstance(results, dict) or not isinstance(results.get('results'), list):
+            raise ValueError('Invalid search response')
+        models = OrderedDict((result['uid'], SketchfabModel(result)) for result in results['results'])
+        clear_search()
+        skfb.search_results['current'] = models
+        api.next_results_url = results.get('next')
+        api.prev_results_url = results.get('previous')
+        for result in results['results']:
+            api.request_thumbnail(result.get('thumbnails', {'images': []}), models[result['uid']].thumbnail_url)
+        if not bpy.app.timers.is_registered(poll_thumbnails):
+            bpy.app.timers.register(poll_thumbnails, first_interval=0.0)
+    except (KeyError, TypeError, ValueError):
+        api.search_error = 'Could not load Sketchfab results. Try again.'
 
-    skfb.search_results['current'] = OrderedDict()
-
-    for result in list(json_data.get('results', [])):
-
-        # Dirty fix to avoid parsing obsolete data
-        if 'current' not in skfb.search_results:
-            return
-
-        uid = result['uid']
-        skfb.search_results['current'][result['uid']] = SketchfabModel(result)
-
-        if not os.path.exists(os.path.join(Config.SKETCHFAB_THUMB_DIR, uid) + '.jpeg'):
-            skfb.skfb_api.request_thumbnail(result['thumbnails'], uid)
-        elif uid not in skfb.custom_icons:
-            skfb.custom_icons.load(uid, os.path.join(Config.SKETCHFAB_THUMB_DIR, "{}.jpeg".format(uid)), 'IMAGE')
-
-        # Make a request to get the download_size for org and own models
-        """
-        model = skfb.search_results['current'][result['uid']]
-        if model.download_size is None:
-            api = skfb.skfb_api
-            def set_download_size(r, *args, **kwargs):
-                json_data = r.json()
-                print(json_data)
-                if 'gltf' in json_data and 'size' in json_data['gltf']:
-                    model.download_size = Utils.humanify_size(json_data['gltf']['size'])
-            requests.get(Utils.build_download_url(uid, api.use_org_profile, api.active_org), headers=api.headers, hooks={'response': set_download_size})
-        """
-
-    if json_data['next']:
-        skfb.skfb_api.next_results_url = json_data['next']
-    else:
-        skfb.skfb_api.next_results_url = None
-
-    if json_data['previous']:
-        skfb.skfb_api.prev_results_url = json_data['previous']
-    else:
-        skfb.skfb_api.prev_results_url = None
+    redraw_sketchfab()
+    return None
 
 
 class ThumbnailCollector(threading.Thread):
     def __init__(self, url):
+        super().__init__(daemon=True)
         self.url = url
-        threading.Thread.__init__(self)
-
-    def set_url(self, url):
-        self.url = url
+        self.content = None
 
     def run(self):
-        if not self.url:
-            return
-        requests.get(self.url, stream=True, hooks={'response': self.handle_thumbnail})
+        try:
+            response = requests.get(self.url, timeout=(3, 10))
+            response.raise_for_status()
+            self.content = response.content
+        except requests.exceptions.RequestException:
+            pass
 
-    def handle_thumbnail(self, r, *args, **kwargs):
-        uid = r.url.split('/')[4]
-        if not os.path.exists(Config.SKETCHFAB_THUMB_DIR):
+
+def poll_thumbnails():
+    for path, request in list(thumbnail_requests.items()):
+        if not request.is_alive():
+            del thumbnail_requests[path]
+            if request.content:
+                try:
+                    with open(path, 'wb') as thumbnail:
+                        thumbnail.write(request.content)
+                except OSError:
+                    pass
+
+    skfb = get_sketchfab_props()
+    updated = False
+    for uid, model in skfb.search_results.get('current', {}).items():
+        if uid not in skfb.custom_icons and os.path.isfile(model.thumbnail_url):
             try:
-                os.makedirs(Config.SKETCHFAB_THUMB_DIR)
-            except:
+                skfb.custom_icons.load(uid, model.thumbnail_url, 'IMAGE')
+                updated = True
+            except RuntimeError:
                 pass
-        thumbnail_path = os.path.join(Config.SKETCHFAB_THUMB_DIR, uid) + '.jpeg'
-
-        with open(thumbnail_path, "wb") as f:
-            total_length = r.headers.get('content-length')
-
-            if total_length is None and r.content:
-                f.write(r.content)
-            else:
-                dl = 0
-                total_length = int(total_length)
-                for data in r.iter_content(chunk_size=4096):
-                    dl += len(data)
-                    f.write(data)
-
-        thumbnailsProgress.discard(uid)
-
-        props = get_sketchfab_props()
-        if uid not in props.custom_icons:
-            props.custom_icons.load(uid, os.path.join(Config.SKETCHFAB_THUMB_DIR, "{}.jpeg".format(uid)), 'IMAGE')
+    if updated:
+        skfb.has_loaded_thumbnails = False
+        redraw_sketchfab()
+    return 0.1 if thumbnail_requests else None
 
 
 class LoginModal(bpy.types.Operator):
@@ -1560,16 +1568,23 @@ class SketchfabBrowse(View3DPanel, bpy.types.Panel):
             model = None
 
             result_pages_ops = col.row()
+            if props.skfb_api.search_request is not None:
+                result_pages_ops.enabled = False
             if props.skfb_api.prev_results_url:
                 result_pages_ops.operator("wm.sketchfab_search_prev", text="Previous page", icon='FRAME_PREV')
 
             if props.skfb_api.next_results_url:
                 result_pages_ops.operator("wm.sketchfab_search_next", text="Next page", icon='FRAME_NEXT')
 
+            if props.skfb_api.search_request is not None:
+                col.label(text="Searching Sketchfab…", icon='TIME')
+            elif props.skfb_api.search_error:
+                col.label(text=props.skfb_api.search_error, icon='ERROR')
+
             #result_label = 'Click below to see more results'
             #col.label(text=result_label, icon='INFO')
             try:
-                col.template_icon_view(bpy.context.window_manager, 'result_previews', show_labels=True, scale=8)
+                col.template_icon_view(bpy.context.window_manager, 'result_previews', show_labels=True, scale=8, scale_popup=8)
             except Exception:
                 print('ResultsPanel: Failed to display results')
                 pass
@@ -1782,7 +1797,7 @@ class SketchfabSearch(bpy.types.Operator):
         skfb.skfb_api.prev_results_url = None
         skfb.skfb_api.next_results_url = None
         final_query = build_search_request(skfb.query, skfb.pbr, skfb.animated, skfb.staffpick, skfb.face_count, skfb.categories, skfb.sort_by)
-        skfb.skfb_api.search(final_query, parse_results)
+        skfb.skfb_api.search(final_query)
         return {'FINISHED'}
 
 
@@ -1793,10 +1808,10 @@ class SketchfabSearchNextResults(bpy.types.Operator):
     bl_options = {'INTERNAL'}
 
     def execute(self, context):
-        # prepare request for search
-        clear_search()
-        skfb_api = get_sketchfab_props().skfb_api
-        skfb_api.search_cursor(skfb_api.next_results_url, parse_results)
+        api = get_sketchfab_props().skfb_api
+        if api.search_request is not None or not api.next_results_url:
+            return {'CANCELLED'}
+        api.start_search(api.next_results_url)
         return {'FINISHED'}
 
 
@@ -1807,10 +1822,10 @@ class SketchfabSearchPreviousResults(bpy.types.Operator):
     bl_options = {'INTERNAL'}
 
     def execute(self, context):
-        # prepare request for search
-        clear_search()
-        skfb_api = get_sketchfab_props().skfb_api
-        skfb_api.search_cursor(skfb_api.prev_results_url, parse_results)
+        api = get_sketchfab_props().skfb_api
+        if api.search_request is not None or not api.prev_results_url:
+            return {'CANCELLED'}
+        api.start_search(api.prev_results_url)
         return {'FINISHED'}
 
 class SketchfabCreateAccount(bpy.types.Operator):
@@ -2434,6 +2449,9 @@ class SF_Attributions:
 def unregister():
     global is_plugin_enabled
     cached_login.unregister()
+    for callback in (poll_search, poll_thumbnails):
+        if bpy.app.timers.is_registered(callback):
+            bpy.app.timers.unregister(callback)
     is_plugin_enabled = False
     bpy.utils.previews.remove(SketchfabBrowserProps.custom_icons)
     SketchfabBrowserProps.custom_icons = None

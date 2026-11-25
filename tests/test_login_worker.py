@@ -36,6 +36,11 @@ class LoginWorkerTests(unittest.TestCase):
         self.assertTrue(result['user_has_orgs'])
         self.assertFalse(result['orgs_check_failed'])
 
+    def test_restricted_content_requires_explicit_account_opt_in(self):
+        self.assertTrue(self.verify('restricted')['allows_restricted'])
+        self.assertFalse(self.verify('ok')['allows_restricted'])
+        self.assertFalse(self.verify('invalid-preference')['allows_restricted'])
+
     def test_rejected_token(self):
         self.assertEqual(self.verify('rejected'), {'error': 'rejected'})
 

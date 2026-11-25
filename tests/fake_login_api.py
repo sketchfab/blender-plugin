@@ -33,6 +33,10 @@ class Handler(BaseHTTPRequestHandler):
             payload = {'results': [{'uid': 'synthetic-org'}] if mode == 'organizations' else []}
         else:
             payload = {'username': 'probe', 'displayName': 'Probe', 'account': 'basic'}
+            if mode == 'restricted':
+                payload['allowsRestricted'] = True
+            elif mode == 'invalid-preference':
+                payload['allowsRestricted'] = 'true'
         try:
             self.wfile.write(json.dumps(payload).encode())
         except (BrokenPipeError, ConnectionResetError):

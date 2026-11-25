@@ -55,6 +55,8 @@ class CachedLogin:
         api = self.addon.SketchfabLoginProps.skfb_api
         api.headers = {}
         api.username = api.display_name = api.plan_type = ''
+        api.allows_restricted = False
+        api.reset_search()
         api.user_orgs = []
         api.user_has_orgs = False
         api.orgs_check_failed = False
@@ -87,12 +89,6 @@ class CachedLogin:
             if callback in callbacks:
                 callbacks.remove(callback)
         self.reset_account()
-
-    def redraw(self):
-        for window in self.addon.bpy.context.window_manager.windows:
-            for area in window.screen.areas:
-                if area.type == 'VIEW_3D':
-                    area.tag_redraw()
 
     def restore(self):
         if not self.registered:
@@ -148,7 +144,7 @@ class CachedLogin:
         self.addon.is_plugin_enabled = True
         self.addon.set_login_status('FILE_REFRESH', 'Logging in to Sketchfab...')
         self.addon.bpy.app.timers.register(self.poll_timer, first_interval=0.05)
-        self.redraw()
+        self.addon.redraw_sketchfab()
         return True
 
     def cancel(self):
@@ -186,14 +182,14 @@ class CachedLogin:
         if wm.as_pointer() != self.wm_pointer or login.api_token != self.token:
             self.cancel()
             self.addon.set_login_status('INFO', 'Login cancelled; please try again')
-            self.redraw()
+            self.addon.redraw_sketchfab()
             return None
         if self.job.poll() is None:
             if time.monotonic() - self.started < self.TIMEOUT:
                 return 0.05
             self.cancel()
             self.addon.set_login_status('ERROR', 'Sketchfab login timed out; please try again')
-            self.redraw()
+            self.addon.redraw_sketchfab()
             return None
         output, _ = self.job.communicate()
         returncode = self.job.returncode
@@ -210,9 +206,9 @@ class CachedLogin:
                         raise ValueError('Invalid account data')
                 if not result['username'] or not result['account']:
                     raise ValueError('Missing account data')
-                for field in ('user_has_orgs', 'orgs_check_failed'):
+                for field in ('allows_restricted', 'user_has_orgs', 'orgs_check_failed'):
                     if not isinstance(result[field], bool):
-                        raise ValueError('Invalid organization data')
+                        raise ValueError('Invalid account data')
         except (ValueError, KeyError, TypeError):
             result = {'error': 'unavailable'}
         api = login.skfb_api
@@ -220,6 +216,7 @@ class CachedLogin:
             api.username = result['username']
             api.display_name = result['displayName']
             api.plan_type = result['account']
+            api.allows_restricted = result['allows_restricted']
             api.user_has_orgs = result['user_has_orgs']
             api.orgs_check_failed = result['orgs_check_failed']
             api.build_headers()
@@ -238,5 +235,5 @@ class CachedLogin:
         else:
             self.addon.set_login_status('ERROR', 'Could not verify your Sketchfab account; please try again')
         self.token = None
-        self.redraw()
+        self.addon.redraw_sketchfab()
         return None
