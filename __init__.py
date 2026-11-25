@@ -1715,17 +1715,28 @@ class SketchfabExportProps(bpy.types.PropertyGroup):
     )
 
 
-def capture_upload(context, api):
+def capture_upload(context, api, size_only=False):
     props = context.window_manager.sketchfab_export
-    uid = org_name = password = None
-    method = 'POST'
-    url = Config.SKETCHFAB_MODEL
+    uid = org_name = None
     is_team_upload = bool(api.use_org_profile and api.active_org)
     if props.reuploadBoolean:
-        uid, org_name = parse_model_link(props.reuploadPath)
+        try:
+            uid, org_name = parse_model_link(props.reuploadPath)
+        except ValueError:
+            if size_only:
+                return None, None
+            raise
+        is_team_upload = org_name is not None
+    plan = 'ent' if is_team_upload else api.plan_type
+    if size_only:
+        return None, plan
+
+    password = None
+    method = 'POST'
+    url = Config.SKETCHFAB_MODEL
+    if uid:
         method = 'PUT'
         fields = {'uid': uid, 'source': 'blender-exporter'}
-        is_team_upload = org_name is not None
     else:
         fields = {
             'name': props.title or Path(bpy.data.filepath).stem,
@@ -1744,7 +1755,7 @@ def capture_upload(context, api):
 
     parameters = model_request(api, uid, org_name)
     parameters.update({'method': method, 'url': url, 'fields': fields})
-    return (parameters, api.headers.copy(), password), 'ent' if is_team_upload else api.plan_type
+    return (parameters, api.headers.copy(), password), plan
 
 
 def save_upload_scene(directory, selection):
@@ -1790,11 +1801,7 @@ class ExportSketchfab(bpy.types.Operator):
         self.job = None
         self.prepared = None
         try:
-            if self.size_only:
-                self.upload = None
-                plan = 'ent' if api.use_org_profile else api.plan_type
-            else:
-                self.upload, plan = capture_upload(context, api)
+            self.upload, plan = capture_upload(context, api, size_only=self.size_only)
             self.upload_limit = Config.SKETCHFAB_UPLOAD_LIMITS.get(plan)
             self.job = WorkerJob(prefix='sketchfab-export-')
             command = save_upload_scene(self.job.directory, self.wm.sketchfab_export.selection)

@@ -69,6 +69,27 @@ def tests():
     api = addon.get_sketchfab_props().skfb_api
     api.headers = {'Authorization': 'Token synthetic'}
     api.plan_type = 'basic'
+    api.active_org = {'uid': '1' * 32, 'username': 'example', 'projects': []}
+    export = bpy.context.window_manager.sketchfab_export
+    export.reuploadBoolean = True
+    for use_team, path, expected_mb in (
+        (True, f'https://sketchfab.com/models/{UID}', 100),
+        (False, f'https://sketchfab.com/orgs/example/models/{UID}', 500),
+    ):
+        api.use_org_profile = use_team
+        export.reuploadPath = path
+        _, plan = addon.capture_upload(bpy.context, api)
+        assert bpy.ops.wm.sketchfab_export(size_only=True) == {'RUNNING_MODAL'}
+        expected_limit = expected_mb * 1024 * 1024
+        assert addon.active_upload.upload_limit == addon.Config.SKETCHFAB_UPLOAD_LIMITS[plan] == expected_limit
+        job = addon.active_upload.job
+        yield lambda: addon.active_upload is None
+        assert job.process.returncode == 0 and job.directory is None
+        assert not (WORK / 'upload.json').exists()
+    export.reuploadPath = ''
+    assert addon.capture_upload(bpy.context, api, size_only=True) == (None, None)
+    export.reuploadBoolean = False
+
     with patch.dict(addon.Config.SKETCHFAB_UPLOAD_LIMITS, {'basic': 1}):
         assert bpy.ops.wm.sketchfab_export() == {'RUNNING_MODAL'}
         job = addon.active_upload.job
