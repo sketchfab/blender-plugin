@@ -4,10 +4,12 @@ from io import BytesIO
 import json
 from pathlib import Path
 import sys
+import time
 import tempfile
 import threading
 from types import ModuleType
 import unittest
+from unittest.mock import patch
 from zipfile import ZipFile
 
 
@@ -15,6 +17,7 @@ package = ModuleType('sketchfab_test')
 package.__path__ = [str(Path(__file__).resolve().parents[1])]
 sys.modules[package.__name__] = package
 transfers = importlib.import_module('sketchfab_test.transfers')
+workers = importlib.import_module('sketchfab_test.worker_process')
 UID = '0123456789abcdef0123456789abcdef'
 
 
@@ -46,49 +49,49 @@ class DownloadTests(unittest.TestCase):
 
     def start_job(self):
         base = self.server.base
-        job = transfers.DownloadJob(self.cache.name, base + '/models', base + '/orgs', base + '/me/orgs',
-                                    {'Authorization': 'Token synthetic'}, UID, None, ())
-        job.start()
-        self.addCleanup(job.cleanup)
+        job = workers.WorkerJob(self.cache.name)
+        self.addCleanup(job.stop)
+        job.start_network(sys.executable, None, 'download', {
+            'models_url': base + '/models', 'orgs_url': base + '/orgs',
+            'memberships_url': base + '/me/orgs', 'uid': UID,
+            'organization': None, 'organizations': [],
+        }, {'Authorization': 'Token synthetic'})
         return job
 
     def test_download_uses_owned_directory_and_sends_no_token_to_archive(self):
         existing = Path(self.cache.name) / 'existing.zip'
         existing.write_bytes(b'unmanaged')
         job = self.start_job()
-        job.join(5)
-        self.assertFalse(job.is_alive())
-        self.assertIsNone(job.error)
-        self.assertTrue(job.path.is_file())
-        self.assertEqual(job.metadata['name'], 'Fixture')
+        job.process.wait(timeout=5)
+        result = job.read_result()['data']
+        self.assertTrue(Path(result['path']).is_file())
+        self.assertEqual(result['metadata']['name'], 'Fixture')
         self.assertIn(('/archive', None), self.server.requests)
-        job.cleanup()
+        job.stop()
         self.assertEqual(list(Path(self.cache.name).iterdir()), [existing])
 
     def test_interrupted_download_is_discarded_and_can_be_retried(self):
         self.server.mode = 'interrupt'
         job = self.start_job()
-        job.join(5)
-        self.assertFalse(job.is_alive())
-        self.assertTrue(job.error)
+        job.process.wait(timeout=5)
+        self.assertIn('error', job.read_result())
+        job.stop()
         self.assertEqual(list(Path(self.cache.name).iterdir()), [])
 
         self.server.mode = 'normal'
         retry = self.start_job()
-        retry.join(5)
-        self.assertIsNone(retry.error)
-        self.assertTrue(retry.path.is_file())
+        retry.process.wait(timeout=5)
+        self.assertTrue(Path(retry.read_result()['data']['path']).is_file())
 
-    def test_cancelling_a_download_discards_partial_output(self):
+    def test_cancelling_a_download_kills_process_and_discards_partial_output(self):
         self.server.mode = 'pause'
         self.server.archive = make_archive([('texture.png', b'x' * (2 * transfers.CHUNK_SIZE))])
         job = self.start_job()
         self.assertTrue(self.server.started.wait(5))
-        job.cancel()
+        job.stop()
+        job.process.wait(timeout=2)
+        workers.reap_workers()
         self.server.resume.set()
-        job.join(5)
-        self.assertFalse(job.is_alive())
-        self.assertIsNone(job.path)
         self.assertEqual(list(Path(self.cache.name).iterdir()), [])
 
     def test_invalid_archive_members_and_external_paths_are_rejected(self):
@@ -101,9 +104,9 @@ class DownloadTests(unittest.TestCase):
         for archive in invalid:
             self.server.archive = archive
             job = self.start_job()
-            job.join(5)
-            self.assertTrue(job.error)
-            self.assertIsNone(job.path)
+            job.process.wait(timeout=5)
+            self.assertIn('error', job.read_result())
+            job.stop()
             self.assertEqual(list(Path(self.cache.name).iterdir()), [])
 
 
@@ -128,15 +131,32 @@ class DownloadHandler(BaseHTTPRequestHandler):
             self.wfile.write(body[:transfers.CHUNK_SIZE])
             self.server.started.set()
             self.server.resume.wait(5)
-            self.wfile.write(body[transfers.CHUNK_SIZE:])
+            try:
+                self.wfile.write(body[transfers.CHUNK_SIZE:])
+            except (BrokenPipeError, ConnectionResetError):
+                pass
         else:
             self.wfile.write(body)
 
 
 class UploadTests(unittest.TestCase):
     def setUp(self):
-        self.directory = Path(tempfile.mkdtemp())
-        self.addCleanup(transfers.shutil.rmtree, self.directory, ignore_errors=True)
+        self.workspace = tempfile.TemporaryDirectory()
+        self.directory = Path(self.workspace.name)
+        self.addCleanup(self.workspace.cleanup)
+
+    def test_worker_keeps_credentials_out_of_arguments_and_request_file(self):
+        job = workers.WorkerJob(self.directory)
+        self.addCleanup(job.stop)
+        with patch.object(job, 'start') as start:
+            job.start_network(sys.executable, None, 'upload', {'uid': UID},
+                              {'Authorization': 'Token synthetic-auth'}, password='synthetic-password')
+        command, env = start.call_args.args
+        request = (job.directory / 'request.json').read_text()
+        for secret in ('synthetic-auth', 'synthetic-password'):
+            self.assertNotIn(secret, request)
+            self.assertNotIn(secret, ' '.join(command))
+            self.assertIn(secret, env['SKETCHFAB_WORKER_SECRETS'])
 
     def test_multipart_matches_content_length_and_streams_the_file(self):
         from email import policy
@@ -170,63 +190,44 @@ class UploadTests(unittest.TestCase):
         url = f'http://127.0.0.1:{server.server_port}/models/{UID}'
         token = 'Token synthetic'
         fields = {'name': 'A test model', 'isPublished': False}
-        result = transfers.send_model(path, path.name, 'PUT', url, {'Authorization': token}, fields, UID,
-                                      threading.Event())
-        self.assertEqual(result, UID)
+        job = workers.WorkerJob(self.directory)
+        self.addCleanup(job.stop)
+        job.start_network(sys.executable, None, 'upload', {
+            'filepath': str(path), 'filename': path.name, 'method': 'PUT', 'url': url,
+            'models_url': f'http://127.0.0.1:{server.server_port}/models',
+            'orgs_url': '', 'uid': UID, 'organization': None, 'organizations': [], 'fields': fields,
+        }, {'Authorization': token}, password='synthetic-password')
+        job.process.wait(timeout=5)
+        self.assertEqual(job.read_result()['data'], UID)
         self.assertEqual(received['token'], token)
         self.assertEqual(received['length'], len(received['content']))
         header = f"Content-Type: {received['content_type']}\r\n\r\n".encode()
         message = BytesParser(policy=policy.default).parsebytes(header + received['content'])
-        title, published, attachment = list(message.iter_parts())
+        title, published, password, attachment = list(message.iter_parts())
         self.assertEqual(title.get_payload(decode=True), b'A test model')
         self.assertEqual(published.get_payload(decode=True), b'False')
+        self.assertEqual(password.get_payload(decode=True), b'synthetic-password')
         self.assertEqual(attachment.get_param('name', header='content-disposition'), 'modelFile')
         self.assertEqual(attachment.get_filename(), 'model.glb')
         self.assertEqual(sha256(attachment.get_payload(decode=True)).digest(), sha256(model).digest())
 
-        cancelled = threading.Event()
         with path.open('rb') as file:
-            parts = iter(transfers.MultipartUpload(file, path, path.name, fields, cancelled))
+            parts = iter(transfers.MultipartUpload(file, path, path.name, fields))
             next(parts)
             self.assertEqual(len(next(parts)), transfers.CHUNK_SIZE)
             self.assertEqual(file.tell(), transfers.CHUNK_SIZE)
-            cancelled.set()
-            with self.assertRaises(transfers.TransferCancelled):
-                next(parts)
-
-    def test_size_check_and_limit_skip_upload_and_remove_temporary_files(self):
-        for send, limit in ((None, None), (self.fail, 2)):
-            with self.subTest(limit=limit):
-                directory = Path(tempfile.mkdtemp(dir=self.directory))
-                path = directory / 'fixture.glb'
-                result = {'size': 4, 'filepath': str(path), 'filename': path.name}
-                script = (
-                    f"from pathlib import Path\nPath({str(path)!r}).write_bytes(b'test')\n"
-                    f"Path({str(directory / 'export-sketchfab.json')!r}).write_text({json.dumps(result)!r})\n"
-                )
-                job = transfers.UploadJob(directory, [sys.executable, '-c', script], limit, send)
-                job.start()
-                job.join(5)
-                self.assertFalse(job.is_alive())
-                self.assertIsNone(job.error)
-                self.assertEqual(job.prepared['size'], 4)
-                self.assertFalse(directory.exists())
 
     def test_cancel_stops_background_preparation_and_removes_temporary_files(self):
-        import time
-
-        started = self.directory / 'started'
+        job = workers.WorkerJob(self.directory)
+        self.addCleanup(job.stop)
+        started = job.directory / 'started'
         script = f"from pathlib import Path; import time; Path({str(started)!r}).touch(); time.sleep(60)"
-        job = transfers.UploadJob(self.directory, [sys.executable, '-c', script], None, self.fail)
-        job.start()
-        self.addCleanup(job.cancelled.set)
+        job.start([sys.executable, '-c', script])
         deadline = time.monotonic() + 5
         while not started.exists() and time.monotonic() < deadline:
             time.sleep(0.02)
         self.assertTrue(started.exists())
-        job.cancelled.set()
-        job.join(5)
-        self.assertFalse(job.is_alive())
-        self.assertIsNone(job.prepared)
-        self.assertIsNone(job.error)
-        self.assertFalse(self.directory.exists())
+        job.stop()
+        job.process.wait(timeout=2)
+        workers.reap_workers()
+        self.assertEqual(list(self.directory.iterdir()), [])

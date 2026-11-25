@@ -4,7 +4,6 @@ from pathlib import Path
 import struct
 import sys
 import tempfile
-import threading
 
 import bpy
 
@@ -16,12 +15,15 @@ addon = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = addon
 spec.loader.exec_module(addon)
 
-def prepare(selection):
-    from sketchfab_audit.transfers import pack_scene
+jobs = []
 
-    directory = Path(tempfile.mkdtemp(dir=work))
-    command = addon.save_upload_scene(directory, selection)
-    return pack_scene(command, directory, threading.Event())
+
+def prepare(selection):
+    job = addon.WorkerJob(work)
+    jobs.append(job)
+    job.start(addon.save_upload_scene(job.directory, selection))
+    job.process.wait(timeout=90)
+    return job.read_prepared_export()
 
 def read_glb(path):
     data = Path(path).read_bytes()
@@ -170,4 +172,6 @@ else:
             assert bpy.data.objects['GeometrySource'].hide_render
         print_probe(title, {'textures_packed': texture_states, 'objects': [obj.name for obj in bpy.data.objects]})
 print_probe('complete', list(bpy.app.version))
+for job in jobs:
+    job.stop()
 workspace.cleanup()

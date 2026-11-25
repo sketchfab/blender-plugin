@@ -1,12 +1,12 @@
-from http.server import ThreadingHTTPServer
 import importlib.util
 import json
 import os
 from pathlib import Path
 import sys
-import threading
+import subprocess
 import time
 import traceback
+from unittest.mock import patch
 from zipfile import ZipFile
 
 import bpy
@@ -27,30 +27,12 @@ addon.Cache.SKETCHFAB_CACHE_FILE = WORK / 'synthetic.cache'
 addon.register()
 
 
-class FixtureHandler(DownloadHandler):
-    def do_POST(self):
-        self.server.posted = self.rfile.read(int(self.headers['Content-Length']))
-        self.server.upload_path = self.path
-        body = json.dumps({'uid': UID}).encode()
-        self.send_response(201)
-        self.send_header('Content-Length', str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
-
-
-server = ThreadingHTTPServer(('127.0.0.1', 0), FixtureHandler)
-server.requests = []
-server.mode = 'normal'
-server.posted = None
-server.started = threading.Event()
-server.resume = threading.Event()
-server.base = f'http://127.0.0.1:{server.server_port}'
-thread = threading.Thread(target=server.serve_forever, daemon=True)
-thread.start()
-
-addon.Config.SKETCHFAB_MODEL = server.base + '/models'
-addon.Config.SKETCHFAB_ME = server.base + '/me'
-addon.Config.SKETCHFAB_ORGS = server.base + '/orgs'
+server = subprocess.Popen([addon.cached_login.interpreter(), '-I',
+                           str(repo / 'tests/fake_transfer_api.py'), str(WORK)], stdout=subprocess.PIPE, text=True)
+base = f'http://127.0.0.1:{int(server.stdout.readline())}'
+addon.Config.SKETCHFAB_MODEL = base + '/models'
+addon.Config.SKETCHFAB_ME = base + '/me'
+addon.Config.SKETCHFAB_ORGS = base + '/orgs'
 
 original = WORK / 'original.blend'
 
@@ -75,51 +57,61 @@ def tests():
         for buffer in json.loads(gltf.read_text())['buffers']:
             archive.write(gltf.parent / buffer['uri'], buffer['uri'])
         archive.writestr('padding.bin', b'x' * (2 * transfers.CHUNK_SIZE))
-    server.archive = archive_path.read_bytes()
 
     assert bpy.ops.wm.sketchfab_export(size_only=True) == {'RUNNING_MODAL'}
     job = addon.active_upload.job
     yield lambda: addon.active_upload is None
-    assert job.error is None and job.prepared['size'] > 0
-    assert server.posted is None and not job.directory.exists()
+    assert job.process.returncode == 0 and job.directory is None
+    assert not (WORK / 'upload.json').exists()
     assert Path(bpy.data.filepath) == original
 
     api = addon.get_sketchfab_props().skfb_api
     api.headers = {'Authorization': 'Token synthetic'}
+    api.plan_type = 'basic'
+    with patch.dict(addon.Config.SKETCHFAB_UPLOAD_LIMITS, {'basic': 1}):
+        assert bpy.ops.wm.sketchfab_export() == {'RUNNING_MODAL'}
+        job = addon.active_upload.job
+        yield lambda: addon.active_upload is None
+        assert job.process.returncode == 0 and job.directory is None
+        assert not (WORK / 'upload.json').exists()
+
     assert bpy.ops.wm.sketchfab_export() == {'RUNNING_MODAL'}
     job = addon.active_upload.job
+    prepare_pid = job.process.pid
     yield lambda: addon.active_upload is None
-    assert job.error is None and job.model_uid == UID and b'modelFile' in server.posted
-    assert server.upload_path == '/models'
+    assert job.process.pid != prepare_pid
+    assert json.loads((WORK / 'upload.json').read_text()) == {
+        'path': '/models', 'has_model': True, 'authenticated': True,
+    }
     assert addon.uploaded_model_url.endswith(UID)
 
     api.use_org_profile = True
     api.active_org = {'uid': 'fixture-team', 'username': 'example'}
     job = start_import()
+    assert job.process.pid != os.getpid()
     yield lambda: addon.active_download is None
-    assert job.error is None and job.directory is None
+    assert job.process.returncode == 0 and job.directory is None
     assert 'Fixture' in bpy.context.scene.objects
     assert 'Fixture' in bpy.data.texts['sf_attributions'].as_string()
-    assert (f'/models/{UID}/download', 'Token synthetic') in server.requests
+    assert (WORK / 'personal-download').is_file()
 
-    server.mode = 'pause'
+    (WORK / 'pause').write_text('load')
     job = start_import()
-    yield server.started.is_set
+    yield (WORK / 'load-started').is_file
     assert bpy.ops.wm.open_mainfile(filepath=str(original)) == {'FINISHED'}
-    server.resume.set()
-    yield lambda: not job.is_alive()
-    assert addon.active_download is None and job.directory is None
+    yield lambda: job.directory is None
+    assert addon.active_download is None and job.process.returncode != 0
     assert 'sf_attributions' not in bpy.data.texts and 'Fixture' not in bpy.data.objects
+    (WORK / 'load-resume').touch()
 
-    server.started.clear()
-    server.resume.clear()
+    (WORK / 'pause').write_text('disable')
     job = start_import()
-    yield server.started.is_set
+    yield (WORK / 'disable-started').is_file
     addon.unregister()
-    server.resume.set()
-    yield lambda: not job.is_alive()
-    assert addon.active_download is None and job.directory is None
+    yield lambda: job.directory is None
+    assert addon.active_download is None and job.process.returncode != 0
     assert 'sf_attributions' not in bpy.data.texts
+    (WORK / 'disable-resume').touch()
 
 
 steps = tests()
@@ -140,9 +132,8 @@ def drive():
     except Exception:
         traceback.print_exc()
         result = 'failed'
-    server.resume.set()
-    server.shutdown()
-    server.server_close()
+    server.kill()
+    server.communicate()
     (WORK / 'transfer-results.txt').write_text(result)
     bpy.ops.wm.quit_blender()
     return None

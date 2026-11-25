@@ -108,26 +108,17 @@ def tests():
     login.schedule_restore()
     yield finished
     uid = 'fdecba9876543210fedcba9876543210'
-    model = {'uid': uid, 'name': 'Fixture', 'vertexCount': 3, 'faceCount': 1,
-             'user': {'username': 'author', 'displayName': 'Author'},
-             'archives': {'gltf': {}}}
-    base = 'http://127.0.0.1:{}/search'.format(port)
+    base = 'http://127.0.0.1:{}'.format(port)
     query = addon.build_search_request('mesh & rig', False, False, False, 'ANY', 'ALL', 'RELEVANCE')
 
-    def search_request(url, headers):
-        assert threading.current_thread() is not threading.main_thread()
-        if url == base + '?page=2':
-            return {'results': [model], 'previous': 'https://unrelated.example/search'}
-        if url == addon.Config.SKETCHFAB_MODEL + '/' + uid:
-            return {'license': {'fullName': 'Fixture license'}, 'animationCount': 1}
-        assert 'q=mesh+%26+rig' in url and 'restricted=1' in url
-        assert headers == {'Authorization': 'Token synthetic-test-token'}
-        return {'results': [model], 'next': '?page=2'}
-
-    with patch.object(addon, 'api_json', search_request), patch.object(addon.Config, 'BASE_SEARCH', base + '?type=models'):
+    with patch.object(addon.Config, 'BASE_SEARCH', base + '/search?type=models'), \
+            patch.object(addon.Config, 'SKETCHFAB_MODEL', base + '/models'):
         api.search(query)
+        request = api.search_request
+        assert request.process.pid != os.getpid()
         yield lambda: api.search_request is None
-        assert api.next_results_url == base + '?page=2'
+        assert api.next_results_url == base + '/search?page=2'
+        yield lambda: addon.thumbnail_request is None and uid in addon.get_sketchfab_props().custom_icons
         assert bpy.ops.wm.sketchfab_search_next() == {'FINISHED'}
         yield lambda: api.search_request is None
         assert api.prev_results_url is None
@@ -153,19 +144,7 @@ def tests():
 
     org_uid = '0123456789abcdef0123456789abcdef'
     project_uid = 'fedcba9876543210fedcba9876543210'
-    def organization_request(url, headers):
-        assert threading.current_thread() is not threading.main_thread()
-        assert headers == api.headers
-        if url == addon.Config.SKETCHFAB_ME + '/orgs':
-            return {'results': [{'uid': org_uid, 'displayName': 'Test organization',
-                                 'username': 'test-org', 'publicProfileUrl': 'https://example.invalid/test-org'}],
-                    'next': None}
-        if url == addon.Config.SKETCHFAB_ORGS + '/' + org_uid + '/projects':
-            return {'results': [{'uid': project_uid, 'name': 'Test project', 'slug': 'test-project',
-                                 'org': {'uid': org_uid}, 'modelCount': 1, 'memberCount': 1}], 'next': None}
-        raise AssertionError('Unexpected organization request')
-
-    with patch.object(api, 'search'), patch.object(addon, 'api_json', organization_request):
+    with patch.object(api, 'search'), patch.object(addon.Config, 'SKETCHFAB_ORGS', base + '/fixture-teams'):
         addon.get_sketchfab_props_proxy().use_org_profile = True
         yield lambda: not api.orgs_loading
     assert api.active_org['uid'] == org_uid and api.use_org_profile
@@ -244,9 +223,13 @@ def tests():
     login.interpreter = lambda: None
     login.schedule_restore()
     yield finished
-    login.interpreter = binary
     assert not addon.is_plugin_enabled
-    checks.append('Unavailable interpreter retains manual activation')
+    addon.get_sketchfab_login_props().api_token = 'synthetic-test-token'
+    api.login()
+    yield lambda: not addon.background_requests
+    login.interpreter = binary
+    assert api.is_user_logged()
+    checks.append('Manual login uses a background Blender process when standalone Python is unavailable')
 
     reset()
     original_popen = subprocess.Popen

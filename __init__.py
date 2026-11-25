@@ -17,21 +17,18 @@ limitations under the License.
 import csv
 import os
 import requests
-import threading
 import time
 from collections import OrderedDict
 import tempfile
 import json
-import shutil
 from pathlib import Path
 import sys
 from urllib.parse import quote_plus, urljoin, urlsplit
 
 from .cached_login import CachedLogin
-from .model_links import MODEL_UID, model_endpoint, parse_model_link
-from .organization_api import fetch_organizations
+from .model_links import MODEL_UID, parse_model_link
 from .token_cache import TokenCache
-from .transfers import (DownloadJob, UploadError, UploadJob, api_json, check_cancelled, send_model)
+from .worker_process import WorkerJob, reap_workers, retired_workers
 
 import bpy
 import bpy.utils.previews
@@ -62,7 +59,7 @@ bl_info['blender'] = getattr(bpy.app, "version")
 
 PLUGIN_VERSION = str(bl_info['version']).strip('() ').replace(',', '.')
 preview_collection = {}
-thumbnail_requests = {}
+thumbnail_request = None
 background_requests = {}
 active_download = None
 active_upload = None
@@ -302,6 +299,7 @@ class SketchfabApi:
         self.next_results_url = None
         self.prev_results_url = None
         self.search_request = None
+        self.search_url = None
         self.search_error = ''
         self.user_orgs = []
         self.orgs_loaded = False
@@ -333,7 +331,15 @@ class SketchfabApi:
             return
         if cached_login.start(token):
             return
-        bpy.ops.wm.login_modal('INVOKE_DEFAULT')
+        set_login_status('FILE_REFRESH', 'Logging in to Sketchfab…')
+
+        def apply(result):
+            if get_sketchfab_login_props().api_token == token:
+                cached_login.apply_result(result or {'error': 'unavailable'}, token)
+            else:
+                set_login_status('INFO', 'Login cancelled; please try again')
+
+        queue_request('login', {'url': Config.SKETCHFAB_ME}, {'Authorization': 'Token ' + token}, apply)
 
     def is_user_logged(self):
         return bool(self.headers)
@@ -356,50 +362,16 @@ class SketchfabApi:
 
         bpy.ops.wm.sketchfab_search('EXEC_DEFAULT')
 
-    def request_user_info(self):
-        requests.get(Config.SKETCHFAB_ME, headers=self.headers, hooks={'response': self.parse_user_info}, timeout=(3, 10))
-
     def get_user_info(self):
         if self.display_name and self.plan_type:
             return '{} ({})'.format(self.display_name, self.plan_type)
         else:
             return ('', '')
 
-    def parse_user_info(self, r, *args, **kargs):
-        if r.status_code == 200:
-            user_data = r.json()
-            self.username = user_data['username']
-            self.display_name = user_data['displayName']
-            self.plan_type = user_data['account']
-            self.allows_restricted = user_data.get('allowsRestricted') is True
-            requests.get(Config.SKETCHFAB_ME + "/orgs", headers=self.headers, hooks={'response': self.on_user_orgs_check}, timeout=(3, 10))
-        else:
-            # Leave the rejected token in the panel field so it can be corrected.
-            self.headers = {}
-            set_login_status('ERROR', 'Failed to authenticate')
-            if r.status_code == requests.codes.unauthorized:
-                # The token itself was rejected, so drop it from the cache. Left
-                # there, a dead token is restored and retried on every start.
-                Cache.delete_keys('api_token')
-                print('\nInvalid API token\nYou can get your API token here:\nhttps://sketchfab.com/settings/password\n')
-                ShowMessage("ERROR", "Failed to authenticate", "Invalid API token")
-            else:
-                # A server-side or network failure says nothing about the token,
-                # so keep it cached instead of making the user paste it again.
-                print('\nCould not verify your Sketchfab account (HTTP {})\n'.format(r.status_code))
-                ShowMessage("ERROR", "Failed to authenticate",
-                            "Sketchfab returned HTTP {}, please try again".format(r.status_code))
-
     def request_user_orgs(self):
         if self.orgs_loaded or self.orgs_loading or not self.is_user_logged():
             return
         self.orgs_loading = True
-        headers = self.headers.copy()
-        memberships = Config.SKETCHFAB_ME + '/orgs'
-        orgs_url = Config.SKETCHFAB_ORGS
-
-        def load():
-            return fetch_organizations(memberships, orgs_url, lambda url: api_json(url, headers))
 
         def apply(orgs):
             self.orgs_loading = False
@@ -413,26 +385,14 @@ class SketchfabApi:
             if get_sketchfab_props_proxy().use_org_profile:
                 refresh_orgs(None, bpy.context)
 
-        queue_json_request(load, apply)
-
-    def on_user_orgs_check(self, r, *args, **kargs):
-        self.orgs_check_failed = r.status_code != 200
-        self.user_has_orgs = bool((r.status_code == 200) and len(r.json().get("results", [])))
-
-    def request_thumbnail(self, thumbnails_json, path):
-        if path and path not in thumbnail_requests and not os.path.isfile(path):
-            url = Utils.get_thumbnail_url(thumbnails_json)
-            if url:
-                request = ThumbnailCollector(url)
-                thumbnail_requests[path] = request
-                request.start()
+        queue_request('orgs', {'url': Config.SKETCHFAB_ME + '/orgs', 'orgs_url': Config.SKETCHFAB_ORGS},
+                      self.headers, apply)
 
     def request_model_info(self, model):
         model.info_requested = True
         url = f'{Config.SKETCHFAB_MODEL}/{model.uid}'
         if self.use_org_profile and self.active_org:
             url = f'{Config.SKETCHFAB_ORGS}/{self.active_org["uid"]}/models/{model.uid}'
-        headers = self.headers.copy()
 
         def apply(data):
             if get_sketchfab_model(model.uid) is not model:
@@ -446,17 +406,21 @@ class SketchfabApi:
             if isinstance(count, int):
                 model.animated = f'Yes ({count} animation(s))' if count > 0 else 'No'
 
-        queue_json_request(lambda: api_json(url, headers), apply)
+        queue_request('json', {'url': url}, self.headers, apply)
 
     def restricted_search_filter(self):
         return '&restricted=1' if self.is_user_logged() and self.allows_restricted else ''
 
     def reset_search(self):
+        stop_worker(self.search_request)
         self.search_request = None
+        self.search_url = None
         self.search_error = ''
         self.next_results_url = None
         self.prev_results_url = None
-        thumbnail_requests.clear()
+        stop_thumbnails()
+        for job in background_requests:
+            stop_worker(job)
         background_requests.clear()
         if getattr(bpy.context.window_manager, 'sketchfab_browser', None) is not None:
             clear_search()
@@ -479,10 +443,12 @@ class SketchfabApi:
 
     def start_search(self, url):
         self.search_error = ''
-        headers = self.headers.copy()
-        self.search_request = JsonRequest(lambda: (api_json(url, headers), url))
-        self.search_request.start()
-        if not bpy.app.timers.is_registered(poll_search):
+        stop_worker(self.search_request)
+        self.search_url = url
+        self.search_request = start_request('json', {'url': url}, self.headers)
+        if self.search_request is None:
+            self.search_error = 'Could not start the Sketchfab search. Try again.'
+        elif not bpy.app.timers.is_registered(poll_search):
             bpy.app.timers.register(poll_search, first_interval=0.05)
         redraw_sketchfab()
 
@@ -811,7 +777,7 @@ def draw_import_button(layout, model, context):
     import_ops.enabled = (active_download is None and skfb.skfb_api.is_user_logged()
                           and context.mode == 'OBJECT' and bool(MODEL_UID.fullmatch(model.uid)))
     if active_download is not None:
-        progress = active_download.job.progress
+        progress = active_download.progress
         if progress is None:
             downloadlabel = 'Downloading model…'
         elif progress < 100:
@@ -879,32 +845,46 @@ def build_search_request(query, pbr, animated, staffpick, face_count, category, 
     return final_query
 
 
-class JsonRequest(threading.Thread):
-    def __init__(self, load):
-        super().__init__(daemon=True)
-        self.load = load
-        self.results = None
-
-    def run(self):
-        try:
-            self.results = self.load()
-        except (requests.exceptions.RequestException, ValueError, KeyError, TypeError):
-            pass
+def start_network(job, action, parameters, headers=None, password=None):
+    job.start_network(cached_login.interpreter(), bpy.app.binary_path, action, parameters, headers, password)
 
 
-def queue_json_request(load, apply):
-    request = JsonRequest(load)
-    background_requests[request] = apply
-    request.start()
-    if not bpy.app.timers.is_registered(poll_json_requests):
-        bpy.app.timers.register(poll_json_requests, first_interval=0.05)
+def stop_worker(job):
+    if job is not None:
+        job.stop()
+        if retired_workers and not bpy.app.timers.is_registered(reap_workers):
+            bpy.app.timers.register(reap_workers, first_interval=0.0, persistent=True)
 
 
-def poll_json_requests():
+def start_request(action, parameters, headers=None, root=None):
+    job = None
+    try:
+        job = WorkerJob(root)
+        start_network(job, action, parameters, headers)
+        return job
+    except (OSError, ValueError):
+        stop_worker(job)
+        return None
+
+
+def queue_request(action, parameters, headers, apply):
+    job = start_request(action, parameters, headers)
+    if job is None:
+        apply(None)
+        return
+    background_requests[job] = apply
+    if not bpy.app.timers.is_registered(poll_requests):
+        bpy.app.timers.register(poll_requests, first_interval=0.05)
+
+
+def poll_requests():
     updated = False
-    for request in list(background_requests):
-        if not request.is_alive():
-            background_requests.pop(request)(request.results)
+    for job, apply in list(background_requests.items()):
+        if not job.running:
+            result = job.read_result()
+            del background_requests[job]
+            stop_worker(job)
+            apply(result.get('data'))
             updated = True
     if updated:
         redraw_sketchfab()
@@ -927,12 +907,14 @@ def poll_search():
     request = api.search_request
     if request is None:
         return None
-    if request.is_alive():
+    if request.running:
         return 0.05
     api.search_request = None
+    results = request.read_result().get('data')
+    stop_worker(request)
 
     try:
-        results, origin_url = request.results
+        origin_url = api.search_url
         if not isinstance(results, dict) or not isinstance(results.get('results'), list):
             raise ValueError('Invalid search response')
         models = OrderedDict((result['uid'], SketchfabModel(result)) for result in results['results'])
@@ -940,10 +922,7 @@ def poll_search():
         skfb.search_results['current'] = models
         api.next_results_url = search_cursor(origin_url, results.get('next'))
         api.prev_results_url = search_cursor(origin_url, results.get('previous'))
-        for result in results['results']:
-            api.request_thumbnail(result.get('thumbnails', {'images': []}), models[result['uid']].thumbnail_url)
-        if not bpy.app.timers.is_registered(poll_thumbnails):
-            bpy.app.timers.register(poll_thumbnails, first_interval=0.0)
+        request_thumbnails(results['results'], models)
     except (KeyError, TypeError, ValueError):
         api.search_error = 'Could not load Sketchfab results. Try again.'
 
@@ -951,31 +930,41 @@ def poll_search():
     return None
 
 
-class ThumbnailCollector(threading.Thread):
-    def __init__(self, url):
-        super().__init__(daemon=True)
-        self.url = url
-        self.content = None
+def stop_thumbnails():
+    global thumbnail_request
+    stop_worker(thumbnail_request)
+    thumbnail_request = None
 
-    def run(self):
-        try:
-            response = requests.get(self.url, timeout=(3, 10))
-            response.raise_for_status()
-            self.content = response.content
-        except requests.exceptions.RequestException:
-            pass
+
+def request_thumbnails(results, models):
+    global thumbnail_request
+    stop_thumbnails()
+    missing = {}
+    for result in results:
+        uid = result['uid']
+        path = models[uid].thumbnail_url
+        if path and not os.path.isfile(path):
+            url = Utils.get_thumbnail_url(result.get('thumbnails'))
+            if url:
+                missing[uid] = url
+    if missing:
+        thumbnail_request = start_request('thumbnails', {'thumbnails': list(missing.items())},
+                                          root=Config.SKETCHFAB_THUMB_DIR)
+    if not bpy.app.timers.is_registered(poll_thumbnails):
+        bpy.app.timers.register(poll_thumbnails, first_interval=0.0)
 
 
 def poll_thumbnails():
-    for path, request in list(thumbnail_requests.items()):
-        if not request.is_alive():
-            del thumbnail_requests[path]
-            if request.content:
-                try:
-                    with open(path, 'wb') as thumbnail:
-                        thumbnail.write(request.content)
-                except OSError:
-                    pass
+    running = False
+    if thumbnail_request is not None:
+        running = thumbnail_request.running
+        for image in thumbnail_request.directory.glob('*.jpeg'):
+            try:
+                os.replace(image, Path(Config.SKETCHFAB_THUMB_DIR) / image.name)
+            except OSError:
+                pass
+        if not running:
+            stop_thumbnails()
 
     skfb = get_sketchfab_props()
     updated = False
@@ -989,56 +978,7 @@ def poll_thumbnails():
     if updated:
         skfb.has_loaded_thumbnails = False
         redraw_sketchfab()
-    return 0.1 if thumbnail_requests else None
-
-
-class LoginModal(bpy.types.Operator):
-    """Login into your account"""
-    bl_idname = "wm.login_modal"
-    bl_label = ""
-    bl_options = {'INTERNAL'}
-
-    is_logging : BoolProperty(default=False)
-    error : BoolProperty(default=False)
-    error_message : StringProperty(default='')
-
-    def execute(self, context):
-        return {'FINISHED'}
-
-    def handle_token_login(self, api_token):
-        cached_login.cancel()
-        browser_props = get_sketchfab_props()
-        Cache.save_key('api_token', api_token)
-
-        browser_props.skfb_api.build_headers()
-        set_login_status('INFO', '')
-        browser_props.skfb_api.request_user_info()
-        self.is_logging = False
-
-    def modal(self, context, event):
-        if self.error:
-            self.error = False
-            set_login_status('ERROR', '{}'.format(self.error_message))
-            return {"FINISHED"}
-
-        if self.is_logging:
-            set_login_status('FILE_REFRESH', 'Loging in to your Sketchfab account...')
-            return {'RUNNING_MODAL'}
-        else:
-            return {'FINISHED'}
-
-    def invoke(self, context, event):
-        self.is_logging = True
-        try:
-            context.window_manager.modal_handler_add(self)
-            login_props = get_sketchfab_login_props()
-            self.handle_token_login(login_props.api_token)
-        except Exception:
-            get_sketchfab_props().skfb_api.headers = {}
-            self.error = True
-            self.error_message = 'Could not verify your Sketchfab account; please try again'
-
-        return {'RUNNING_MODAL'}
+    return 0.1 if running else None
 
 
 class View3DPanel:
@@ -1332,10 +1272,10 @@ class SketchfabExportPanel(View3DPanel, bpy.types.Panel):
             elif context.mode != 'OBJECT':
                 upload_label = "Export is only available in object mode"
         if active_upload is not None:
-            if active_upload.job.prepared is None:
+            if active_upload.prepared is None:
                 upload_label = 'Preparing model…'
             else:
-                size = Utils.humanify_size(active_upload.job.prepared['size'])
+                size = Utils.humanify_size(active_upload.prepared['size'])
                 upload_label = f'Uploading {size}'
             upload_icon = 'TIME'
         row.enabled = upload_enabled and active_upload is None
@@ -1390,11 +1330,16 @@ class SketchfabModel:
         self.animated = False
 
 
-def ShowMessage(icon = "INFO", title = "Info", message = "Information"):
-    def draw(self, context):
-        self.layout.label(text=message)
-    print("\n{}: {}".format(icon, message))
-    bpy.context.window_manager.popup_menu(draw, title = title, icon = icon)
+def model_request(api, uid, organization):
+    return {
+        'models_url': Config.SKETCHFAB_MODEL,
+        'orgs_url': Config.SKETCHFAB_ORGS,
+        'memberships_url': Config.SKETCHFAB_ME + '/orgs',
+        'uid': uid,
+        'organization': organization,
+        'organizations': [{'uid': org['uid'], 'username': org['username']} for org in api.user_orgs]
+                         if api.orgs_loaded else None,
+    }
 
 
 class SketchfabDownloadModel(bpy.types.Operator):
@@ -1423,25 +1368,25 @@ class SketchfabDownloadModel(bpy.types.Operator):
                 organization = api.active_org['username'] if api.use_org_profile and api.active_org else None
                 model = get_sketchfab_model(uid)
                 self.title = model.title if model else 'Sketchfab Model'
-
-            self.job = DownloadJob(Config.SKETCHFAB_MODEL_DIR, Config.SKETCHFAB_MODEL, Config.SKETCHFAB_ORGS,
-                                   Config.SKETCHFAB_ME + '/orgs', api.headers, uid, organization,
-                                   tuple(api.user_orgs) if api.orgs_loaded else None)
-        except (ValueError, OSError) as error:
+        except ValueError as error:
             self.report({'ERROR'}, str(error))
             return {'CANCELLED'}
 
+        self.uid = uid
         self.wm = wm
         self.scene = context.scene
         self.view_layer = context.view_layer
         self.timer = None
+        self.progress = None
+        self.job = start_request('download', model_request(api, uid, organization), api.headers,
+                                 root=Config.SKETCHFAB_MODEL_DIR)
+        if self.job is None:
+            self.report({'ERROR'}, 'Could not start the Sketchfab download')
+            return {'CANCELLED'}
         try:
             self.timer = wm.event_timer_add(0.2, window=context.window)
-            self.job.start()
             wm.modal_handler_add(self)
         except RuntimeError:
-            if not self.job.ident:
-                self.job.cleanup()
             self.cancel(context)
             self.report({'ERROR'}, 'Could not start the Sketchfab download')
             return {'CANCELLED'}
@@ -1460,24 +1405,31 @@ class SketchfabDownloadModel(bpy.types.Operator):
         if context.scene != self.scene or context.view_layer != self.view_layer:
             self.cancel(context)
             return {'CANCELLED'}
-        if self.job.is_alive():
+        if self.job.running:
+            try:
+                self.progress = int((self.job.directory / 'progress').read_text(encoding='ascii'))
+            except (OSError, ValueError):
+                pass
             redraw_sketchfab()
             return {'PASS_THROUGH'}
 
         try:
-            if self.job.error or self.job.path is None:
-                self.report({'ERROR'}, self.job.error or 'Could not download the model')
+            result = self.job.read_result()
+            if 'error' in result:
+                self.report({'ERROR'}, result['error'])
                 return {'CANCELLED'}
             if context.mode != 'OBJECT':
                 self.report({'WARNING'}, 'Switch to Object Mode before importing a model')
                 return {'CANCELLED'}
-            title = self.job.metadata.get('name')
+            data = result['data']
+            metadata = data['metadata']
+            title = metadata.get('name')
             if not isinstance(title, str) or not title:
                 title = self.title
-            import_gltf(self.job.path, title)
-            record_download(self.job.metadata, self.job.uid, title)
+            import_gltf(data['path'], title)
+            record_download(metadata, self.uid, title)
             return {'FINISHED'}
-        except (RuntimeError, TypeError, ValueError):
+        except (KeyError, RuntimeError, TypeError, ValueError):
             self.report({'ERROR'}, 'Blender could not import the Sketchfab glTF model')
             return {'CANCELLED'}
         finally:
@@ -1490,7 +1442,7 @@ class SketchfabDownloadModel(bpy.types.Operator):
         if self.timer is not None:
             self.wm.event_timer_remove(self.timer)
             self.timer = None
-        self.job.cancel()
+        stop_worker(self.job)
         redraw_sketchfab()
 
 
@@ -1629,8 +1581,7 @@ def activate_plugin():
         login_props.api_token = api_token
         props.skfb_api.login()
 
-    url = Config.SKETCHFAB_PLUGIN_VERSION
-    queue_json_request(lambda: api_json(url, {}), check_plugin_version)
+    queue_request('json', {'url': Config.SKETCHFAB_PLUGIN_VERSION}, {}, check_plugin_version)
 
     run_default_search()
 
@@ -1705,13 +1656,9 @@ class SketchfabExportProps(bpy.types.PropertyGroup):
 
 def capture_upload(context, api):
     props = context.window_manager.sketchfab_export
-    headers = api.headers.copy()
-    models_url, orgs_url = Config.SKETCHFAB_MODEL, Config.SKETCHFAB_ORGS
-    memberships_url = Config.SKETCHFAB_ME + '/orgs'
-    orgs = tuple(api.user_orgs) if api.orgs_loaded else None
-    uid = org_name = None
+    uid = org_name = password = None
     method = 'POST'
-    url = models_url
+    url = Config.SKETCHFAB_MODEL
     is_team_upload = bool(api.use_org_profile and api.active_org)
     if props.reuploadBoolean:
         uid, org_name = parse_model_link(props.reuploadPath)
@@ -1725,30 +1672,16 @@ def capture_upload(context, api):
             'tags': ' '.join(props.tags.split()[:42]),
             'private': props.private,
             'isPublished': not props.draft,
-            'password': props.password,
             'source': 'blender-exporter',
         }
+        password = props.password
         if is_team_upload:
-            url = f'{orgs_url}/{api.active_org["uid"]}/models'
+            url = f'{Config.SKETCHFAB_ORGS}/{api.active_org["uid"]}/models'
             fields['orgProject'] = props.active_project or ''
 
-    def send(filepath, filename, cancelled):
-        endpoint = url
-        if uid is not None:
-            teams = orgs
-            if org_name and teams is None:
-                def fetch(page):
-                    check_cancelled(cancelled)
-                    return api_json(page, headers)
-
-                teams = fetch_organizations(memberships_url, orgs_url, fetch, include_projects=False)
-            try:
-                endpoint = model_endpoint(models_url, orgs_url, uid, org_name, teams or ())
-            except ValueError as error:
-                raise UploadError(str(error)) from error
-        return send_model(filepath, filename, method, endpoint, headers, fields, uid, cancelled)
-
-    return send, 'ent' if is_team_upload else api.plan_type
+    parameters = model_request(api, uid, org_name)
+    parameters.update({'method': method, 'url': url, 'fields': fields})
+    return (parameters, api.headers.copy(), password), 'ent' if is_team_upload else api.plan_type
 
 
 def save_upload_scene(directory, selection):
@@ -1791,24 +1724,22 @@ class ExportSketchfab(bpy.types.Operator):
 
         self.wm = context.window_manager
         self.timer = None
-        directory = None
         self.job = None
+        self.prepared = None
         try:
             if self.size_only:
-                send = None
+                self.upload = None
                 plan = 'ent' if api.use_org_profile else api.plan_type
             else:
-                send, plan = capture_upload(context, api)
-            directory = Path(tempfile.mkdtemp(prefix='sketchfab-export-'))
-            command = save_upload_scene(directory, self.wm.sketchfab_export.selection)
-            self.job = UploadJob(directory, command, Config.SKETCHFAB_UPLOAD_LIMITS.get(plan), send)
+                self.upload, plan = capture_upload(context, api)
+            self.upload_limit = Config.SKETCHFAB_UPLOAD_LIMITS.get(plan)
+            self.job = WorkerJob(prefix='sketchfab-export-')
+            command = save_upload_scene(self.job.directory, self.wm.sketchfab_export.selection)
             self.timer = self.wm.event_timer_add(0.2, window=context.window)
-            self.job.start()
+            self.job.start(command)
             self.wm.modal_handler_add(self)
         except (OSError, ValueError, RuntimeError) as error:
             self.cancel(context)
-            if directory is not None and (self.job is None or not self.job.ident):
-                shutil.rmtree(directory, ignore_errors=True)
             self.report({'ERROR'}, str(error))
             return {'CANCELLED'}
 
@@ -1827,29 +1758,44 @@ class ExportSketchfab(bpy.types.Operator):
             return {'CANCELLED'}
         if event.type != 'TIMER':
             return {'PASS_THROUGH'}
-        if self.job.is_alive():
+        if self.job.running:
             redraw_sketchfab()
             return {'PASS_THROUGH'}
 
-        self.cancel(context)
-        if self.job.error:
-            self.report({'ERROR'}, self.job.error)
-            return {'CANCELLED'}
-        prepared = self.job.prepared
-        for warning in prepared.get('warnings', []):
-            self.report({'WARNING'}, warning)
-        size = Utils.humanify_size(prepared['size'])
-        limit = self.job.upload_limit
-        if limit is not None and prepared['size'] > limit:
-            self.report({'WARNING' if self.size_only else 'ERROR'},
-                        f'Packed file is {size} and exceeds your {Utils.humanify_size(limit)} upload limit')
+        if self.prepared is None:
+            try:
+                self.prepared = self.job.read_prepared_export()
+                for warning in self.prepared.get('warnings', []):
+                    self.report({'WARNING'}, warning)
+                size = self.prepared['size']
+                if self.upload_limit is not None and size > self.upload_limit:
+                    self.report({'WARNING' if self.size_only else 'ERROR'},
+                                f'Packed file is {Utils.humanify_size(size)} and exceeds your '
+                                f'{Utils.humanify_size(self.upload_limit)} upload limit')
+                elif self.size_only:
+                    self.report({'INFO'}, f'Packed file size is {Utils.humanify_size(size)}')
+                else:
+                    parameters, headers, password = self.upload
+                    parameters.update(filepath=self.prepared['filepath'], filename=self.prepared['filename'])
+                    start_network(self.job, 'upload', parameters, headers, password)
+                    self.upload = None
+                    return {'PASS_THROUGH'}
+            except (OSError, ValueError, KeyError, TypeError):
+                self.report({'ERROR'}, 'Could not prepare the Sketchfab upload')
+                self.cancel(context)
+                return {'CANCELLED'}
+            self.cancel(context)
             return {'FINISHED' if self.size_only else 'CANCELLED'}
-        if self.size_only:
-            self.report({'INFO'}, f'Packed file size is {size}')
-        else:
-            if isinstance(self.job.model_uid, str) and MODEL_UID.fullmatch(self.job.model_uid):
-                uploaded_model_url = f'{Config.SKETCHFAB_URL}/models/{self.job.model_uid}'
-            self.report({'INFO'}, 'Upload complete. Available on your sketchfab.com dashboard.')
+
+        result = self.job.read_result()
+        self.cancel(context)
+        if 'error' in result:
+            self.report({'ERROR'}, result['error'])
+            return {'CANCELLED'}
+        uid = result.get('data')
+        if isinstance(uid, str) and MODEL_UID.fullmatch(uid):
+            uploaded_model_url = f'{Config.SKETCHFAB_URL}/models/{uid}'
+        self.report({'INFO'}, 'Upload complete. Available on your sketchfab.com dashboard.')
         redraw_sketchfab()
         return {'FINISHED'}
 
@@ -1860,8 +1806,8 @@ class ExportSketchfab(bpy.types.Operator):
         if self.timer is not None:
             self.wm.event_timer_remove(self.timer)
             self.timer = None
-        if self.job is not None:
-            self.job.cancelled.set()
+        self.upload = None
+        stop_worker(self.job)
         redraw_sketchfab()
 
 
@@ -1892,7 +1838,7 @@ def updateCacheDirectory(self, context):
             print("Sketchfab: cannot use cache directory '{}': {}".format(candidate, err))
             continue
         if Config.SKETCHFAB_THUMB_DIR != thumb_dir:
-            thumbnail_requests.clear()
+            stop_thumbnails()
         Config.SKETCHFAB_TEMP_DIR  = temp_dir
         Config.SKETCHFAB_THUMB_DIR = thumb_dir
         Config.SKETCHFAB_MODEL_DIR = model_dir
@@ -1948,7 +1894,6 @@ classes = (
     # Operators
     SketchfabEnable,
     SketchfabCreateAccount,
-    LoginModal,
     SketchfabNewVersion,
     SketchfabHelp,
     SketchfabReportIssue,
@@ -2083,7 +2028,7 @@ def unregister():
     if hasattr(bpy.app.handlers, 'quit_pre'):
         bpy.app.handlers.quit_pre.remove(cancel_transfers)
     cached_login.unregister()
-    for callback in (poll_search, poll_thumbnails, poll_json_requests):
+    for callback in (poll_search, poll_thumbnails, poll_requests):
         if bpy.app.timers.is_registered(callback):
             bpy.app.timers.unregister(callback)
     is_plugin_enabled = False

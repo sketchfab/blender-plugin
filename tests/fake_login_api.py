@@ -1,6 +1,12 @@
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import json
+from pathlib import Path
 import time
+from urllib.parse import parse_qs, urlsplit
+
+MODEL_UID = 'fdecba9876543210fedcba9876543210'
+ORG_UID = '0123456789abcdef0123456789abcdef'
+PROJECT_UID = 'fedcba9876543210fedcba9876543210'
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -8,7 +14,31 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
     def do_GET(self):
-        mode = self.path.strip('/').split('/')[0]
+        url = urlsplit(self.path)
+        mode = url.path.strip('/').split('/')[0]
+        if mode == 'thumbnail':
+            self.send_response(200 if 'Authorization' not in self.headers else 400)
+            self.end_headers()
+            self.wfile.write((Path(__file__).resolve().parents[1] / 'placeholder.png').read_bytes())
+            return
+        if mode == 'search':
+            host = f'http://127.0.0.1:{self.server.server_port}'
+            query = parse_qs(url.query)
+            second_page = query.get('page') == ['2']
+            allowed = (self.headers.get('Authorization') == 'Token synthetic-test-token'
+                       and (second_page or (query.get('q') == ['mesh & rig'] and query.get('restricted') == ['1'])))
+            self.send_response(200 if allowed else 400)
+            self.end_headers()
+            model = {'uid': MODEL_UID, 'name': 'Fixture', 'vertexCount': 3, 'faceCount': 1,
+                     'user': {'displayName': 'Author'}, 'archives': {'gltf': {}},
+                     'thumbnails': {'images': [{'url': host + '/thumbnail', 'height': 96}]}}
+            page = {'results': [model]}
+            if second_page:
+                page['previous'] = 'https://unrelated.example/search'
+            else:
+                page['next'] = '?page=2'
+            self.wfile.write(json.dumps(page).encode())
+            return
         if mode == 'slow':
             time.sleep(2)
         if mode == 'redirect':
@@ -29,8 +59,13 @@ class Handler(BaseHTTPRequestHandler):
             payload = {'username': [], 'displayName': 'Probe', 'account': 'basic'}
         elif mode == 'large':
             payload = {'padding': 'x' * (1024 * 1024 + 1)}
+        elif url.path == f'/models/{MODEL_UID}':
+            payload = {'license': {'fullName': 'Fixture license'}, 'animationCount': 1}
+        elif url.path == f'/fixture-teams/{ORG_UID}/projects':
+            payload = {'results': [{'uid': PROJECT_UID, 'name': 'Test project'}]}
         elif is_orgs:
-            payload = {'results': [{'uid': 'synthetic-org'}] if mode == 'organizations' else []}
+            org = {'uid': ORG_UID, 'displayName': 'Test organization', 'username': 'test-org'}
+            payload = {'results': [org] if mode == 'organizations' else []}
         else:
             payload = {'username': 'probe', 'displayName': 'Probe', 'account': 'basic'}
             if mode == 'restricted':

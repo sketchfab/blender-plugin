@@ -213,7 +213,13 @@ class CachedLogin:
                         raise ValueError('Invalid account data')
         except (ValueError, KeyError, TypeError):
             result = {'error': 'unavailable'}
-        api = login.skfb_api
+        self.apply_result(result, self.token)
+        self.token = None
+        self.addon.redraw_sketchfab()
+        return None
+
+    def apply_result(self, result, token):
+        api = self.addon.get_sketchfab_login_props().skfb_api
         if 'error' not in result:
             api.username = result['username']
             api.display_name = result['displayName']
@@ -228,7 +234,7 @@ class CachedLogin:
                 self.addon.set_login_status('INFO', '')
         elif result['error'] == 'rejected':
             try:
-                if self.addon.Cache.get_key('api_token') == self.token:
+                if self.addon.Cache.get_key('api_token') == token:
                     self.addon.Cache.delete_keys('api_token')
             except (OSError, ValueError, TypeError):
                 self.addon.set_login_status('ERROR', 'Invalid API token; could not clear the cached token')
@@ -236,6 +242,3 @@ class CachedLogin:
                 self.addon.set_login_status('ERROR', 'Invalid API token')
         else:
             self.addon.set_login_status('ERROR', 'Could not verify your Sketchfab account; please try again')
-        self.token = None
-        self.addon.redraw_sketchfab()
-        return None
