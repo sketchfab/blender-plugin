@@ -59,6 +59,7 @@ class CachedLogin:
         api.reset_search()
         api.user_orgs = []
         api.orgs_loaded = False
+        api.orgs_loading = False
         api.user_has_orgs = False
         api.orgs_check_failed = False
         api.active_org = None

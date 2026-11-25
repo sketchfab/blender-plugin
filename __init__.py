@@ -25,7 +25,7 @@ import json
 import shutil
 from pathlib import Path
 import sys
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, urljoin, urlsplit
 
 from .cached_login import CachedLogin
 from .model_links import MODEL_UID, model_endpoint, parse_model_link
@@ -63,6 +63,7 @@ bl_info['blender'] = getattr(bpy.app, "version")
 PLUGIN_VERSION = str(bl_info['version']).strip('() ').replace(',', '.')
 preview_collection = {}
 thumbnail_requests = {}
+background_requests = {}
 active_download = None
 active_upload = None
 uploaded_model_url = ''
@@ -174,18 +175,16 @@ class Utils:
         readable = round(readable, 2)
         return '{}{}'.format(readable, suffix)
 
-    def build_download_url(uid, use_org_profile=False, active_org=None):
-        if use_org_profile:
-            return '{}/{}/models/{}/download'.format(Config.SKETCHFAB_ORGS, active_org["uid"], uid)
-        else:
-            return '{}/{}/download'.format(Config.SKETCHFAB_MODEL, uid)
-
     def get_thumbnail_url(thumbnails_json):
         min_height  = 1e6
         min_thumbnail = None
         best_height = 0
         best_thumbnail = None
+        if not isinstance(thumbnails_json, dict) or not isinstance(thumbnails_json.get('images'), list):
+            return None
         for image in thumbnails_json['images']:
+            if not isinstance(image, dict) or not isinstance(image.get('height'), (int, float)) or not image.get('url'):
+                continue
             h = image['height']
             if h <= Config.MAX_THUMBNAIL_HEIGHT and h > best_height:
                 best_height = h
@@ -197,13 +196,6 @@ class Utils:
         if best_thumbnail is None and min_thumbnail is not None:
             return min_thumbnail
         return best_thumbnail
-
-    def get_uid_from_model_url(model_url, use_org_profile=False):
-        try:
-            return model_url.split('/')[7] if use_org_profile else model_url.split('/')[5]
-        except:
-            ShowMessage("ERROR", "Url parsing error", "Error getting uid from url: {}".format(model_url))
-            return None
 
     def clean_node_hierarchy(objects, root_name):
         roots = [obj for obj in objects if obj.parent is None]
@@ -259,9 +251,10 @@ def redraw_sketchfab():
     wm = bpy.context.window_manager
     if wm is not None:
         for window in wm.windows:
-            for area in window.screen.areas:
-                if area.type == 'VIEW_3D':
-                    area.tag_redraw()
+            if window.screen is not None:
+                for area in window.screen.areas:
+                    if area.type == 'VIEW_3D':
+                        area.tag_redraw()
 
 
 def get_plugin_enabled():
@@ -312,6 +305,7 @@ class SketchfabApi:
         self.search_error = ''
         self.user_orgs = []
         self.orgs_loaded = False
+        self.orgs_loading = False
         self.user_has_orgs = False
         self.orgs_check_failed = False
         self.active_org = None
@@ -397,23 +391,29 @@ class SketchfabApi:
                             "Sketchfab returned HTTP {}, please try again".format(r.status_code))
 
     def request_user_orgs(self):
-        if self.orgs_loaded or not self.is_user_logged():
+        if self.orgs_loaded or self.orgs_loading or not self.is_user_logged():
             return
+        self.orgs_loading = True
+        headers = self.headers.copy()
+        memberships = Config.SKETCHFAB_ME + '/orgs'
+        orgs_url = Config.SKETCHFAB_ORGS
 
-        def fetch(url):
-            response = requests.get(url, headers=self.headers, timeout=(3, 10))
-            response.raise_for_status()
-            return response.json()
+        def load():
+            return fetch_organizations(memberships, orgs_url, lambda url: api_json(url, headers))
 
-        try:
-            self.user_orgs = fetch_organizations(Config.SKETCHFAB_ME + '/orgs', Config.SKETCHFAB_ORGS, fetch)
-        except (requests.exceptions.RequestException, KeyError, TypeError, ValueError):
-            self.orgs_check_failed = True
-            return
-        self.orgs_loaded = True
-        self.orgs_check_failed = False
-        self.user_has_orgs = bool(self.user_orgs)
-        self.active_org = self.user_orgs[0] if self.user_orgs else None
+        def apply(orgs):
+            self.orgs_loading = False
+            if orgs is None:
+                self.orgs_check_failed = True
+                return
+            self.user_orgs = orgs
+            self.orgs_loaded = True
+            self.orgs_check_failed = False
+            self.user_has_orgs = bool(orgs)
+            if get_sketchfab_props_proxy().use_org_profile:
+                refresh_orgs(None, bpy.context)
+
+        queue_json_request(load, apply)
 
     def on_user_orgs_check(self, r, *args, **kargs):
         self.orgs_check_failed = r.status_code != 200
@@ -427,31 +427,26 @@ class SketchfabApi:
                 thumbnail_requests[path] = request
                 request.start()
 
-    def request_model_info(self, uid, callback=None):
-        callback = self.handle_model_info if callback is None else callback
-        url = Config.SKETCHFAB_MODEL + '/' + uid
-        if self.use_org_profile and self.active_org.get("uid"):
-            url = Config.SKETCHFAB_ORGS + "/" + self.active_org["uid"] + "/models/" + uid
+    def request_model_info(self, model):
+        model.info_requested = True
+        url = f'{Config.SKETCHFAB_MODEL}/{model.uid}'
+        if self.use_org_profile and self.active_org:
+            url = f'{Config.SKETCHFAB_ORGS}/{self.active_org["uid"]}/models/{model.uid}'
+        headers = self.headers.copy()
 
-        model_infothr = GetRequestThread(url, callback, self.headers)
-        model_infothr.start()
+        def apply(data):
+            if get_sketchfab_model(model.uid) is not model:
+                return
+            if not isinstance(data, dict):
+                model.license = 'Model details unavailable'
+                return
+            license = data.get('license')
+            model.license = (license.get('fullName') if isinstance(license, dict) else None) or 'License unavailable'
+            count = data.get('animationCount')
+            if isinstance(count, int):
+                model.animated = f'Yes ({count} animation(s))' if count > 0 else 'No'
 
-    def handle_model_info(self, r, *args, **kwargs):
-        skfb = get_sketchfab_props()
-        uid = Utils.get_uid_from_model_url(r.url, self.use_org_profile)
-
-        # Dirty fix to avoid processing obsolete result data
-        if 'current' not in skfb.search_results or uid is None or uid not in skfb.search_results['current']:
-            return
-
-        model = skfb.search_results['current'][uid]
-        json_data = r.json()
-        model.license = json_data.get('license', {})
-        if model.license is not None:
-            model.license = model.license.get('fullName', 'Personal (you own this model)')
-        anim_count = int(json_data.get('animationCount', 0))
-        model.animated = 'Yes ({} animation(s))'.format(anim_count) if anim_count > 0 else 'No'
-        skfb.search_results['current'][uid] = model
+        queue_json_request(lambda: api_json(url, headers), apply)
 
     def restricted_search_filter(self):
         return '&restricted=1' if self.is_user_logged() and self.allows_restricted else ''
@@ -462,6 +457,7 @@ class SketchfabApi:
         self.next_results_url = None
         self.prev_results_url = None
         thumbnail_requests.clear()
+        background_requests.clear()
         if getattr(bpy.context.window_manager, 'sketchfab_browser', None) is not None:
             clear_search()
 
@@ -483,7 +479,8 @@ class SketchfabApi:
 
     def start_search(self, url):
         self.search_error = ''
-        self.search_request = SearchRequest(url, self.headers)
+        headers = self.headers.copy()
+        self.search_request = JsonRequest(lambda: (api_json(url, headers), url))
         self.search_request.start()
         if not bpy.app.timers.is_registered(poll_search):
             bpy.app.timers.register(poll_search, first_interval=0.05)
@@ -539,8 +536,9 @@ def refresh_orgs(self, context):
     props = get_sketchfab_props()
     api   = props.skfb_api
 
-    if pprops.use_org_profile and not api.orgs_loaded:
+    if pprops.use_org_profile and not api.orgs_loaded and api.is_user_logged():
         api.request_user_orgs()
+        return
 
     if api.user_orgs:
         api.active_org = next((org for org in api.user_orgs if org["uid"] == pprops.active_org), api.user_orgs[0])
@@ -881,20 +879,46 @@ def build_search_request(query, pbr, animated, staffpick, face_count, category, 
     return final_query
 
 
-class SearchRequest(threading.Thread):
-    def __init__(self, url, headers):
+class JsonRequest(threading.Thread):
+    def __init__(self, load):
         super().__init__(daemon=True)
-        self.url = url
-        self.headers = headers
+        self.load = load
         self.results = None
 
     def run(self):
         try:
-            response = requests.get(self.url, headers=self.headers, timeout=(3, 10))
-            response.raise_for_status()
-            self.results = response.json()
-        except (requests.exceptions.RequestException, ValueError):
+            self.results = self.load()
+        except (requests.exceptions.RequestException, ValueError, KeyError, TypeError):
             pass
+
+
+def queue_json_request(load, apply):
+    request = JsonRequest(load)
+    background_requests[request] = apply
+    request.start()
+    if not bpy.app.timers.is_registered(poll_json_requests):
+        bpy.app.timers.register(poll_json_requests, first_interval=0.05)
+
+
+def poll_json_requests():
+    updated = False
+    for request in list(background_requests):
+        if not request.is_alive():
+            background_requests.pop(request)(request.results)
+            updated = True
+    if updated:
+        redraw_sketchfab()
+    return 0.05 if background_requests else None
+
+
+def search_cursor(origin_url, cursor):
+    if not isinstance(cursor, str) or not cursor:
+        return None
+    try:
+        url = urljoin(origin_url, cursor)
+        return url if urlsplit(url)[:2] == urlsplit(origin_url)[:2] else None
+    except ValueError:
+        return None
 
 
 def poll_search():
@@ -908,14 +932,14 @@ def poll_search():
     api.search_request = None
 
     try:
-        results = request.results
+        results, origin_url = request.results
         if not isinstance(results, dict) or not isinstance(results.get('results'), list):
             raise ValueError('Invalid search response')
         models = OrderedDict((result['uid'], SketchfabModel(result)) for result in results['results'])
         clear_search()
         skfb.search_results['current'] = models
-        api.next_results_url = results.get('next')
-        api.prev_results_url = results.get('previous')
+        api.next_results_url = search_cursor(origin_url, results.get('next'))
+        api.prev_results_url = search_cursor(origin_url, results.get('previous'))
         for result in results['results']:
             api.request_thumbnail(result.get('thumbnails', {'images': []}), models[result['uid']].thumbnail_url)
         if not bpy.app.timers.is_registered(poll_thumbnails):
@@ -1017,17 +1041,6 @@ class LoginModal(bpy.types.Operator):
         return {'RUNNING_MODAL'}
 
 
-class GetRequestThread(threading.Thread):
-    def __init__(self, url, callback, headers={}):
-        self.url = url
-        self.callback = callback
-        self.headers = headers
-        threading.Thread.__init__(self)
-
-    def run(self):
-        requests.get(self.url, headers=self.headers, hooks={'response': self.callback})
-
-
 class View3DPanel:
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'TOOLS' if bpy.app.version < (2, 80, 0) else 'UI'
@@ -1108,7 +1121,9 @@ class TeamsPanel(View3DPanel, bpy.types.Panel):
 
         self.layout.enabled = get_plugin_enabled() and api.is_user_logged()
 
-        if api.orgs_check_failed:
+        if api.orgs_loading:
+            self.layout.label(text="Loading organizations…", icon='TIME')
+        elif api.orgs_check_failed:
             self.layout.label(text="Could not check organization membership", icon='ERROR')
             self.layout.operator('wm.sketchfab_login', text='Retry').authenticate = True
         elif not api.user_has_orgs:
@@ -1135,7 +1150,6 @@ class SketchfabBrowse(View3DPanel, bpy.types.Panel):
     bl_idname = "VIEW3D_PT_sketchfab_browse"
     bl_label = "Import"
 
-    uid   = ''
     label = "Search results"
 
     def draw_search(self, layout, context):
@@ -1245,12 +1259,8 @@ class SketchfabBrowse(View3DPanel, bpy.types.Panel):
                 if not model:
                     return
 
-                if self.uid != model.uid:
-                    self.uid = model.uid
-
-                    if not model.info_requested:
-                        props.skfb_api.request_model_info(model.uid)
-                        model.info_requested = True
+                if not model.info_requested:
+                    props.skfb_api.request_model_info(model)
 
                 draw_model_info(col, model, context)
                 draw_import_button(col, model, context)
@@ -1361,18 +1371,15 @@ class SketchfabModel:
     def __init__(self, json_data):
         self.title = str(json_data['name'])
         self.author = json_data['user']['displayName']
-        self.username = json_data['user']['username']
         self.uid = json_data['uid']
         if not MODEL_UID.fullmatch(self.uid):
             raise ValueError('Invalid model ID in search results')
         self.vertex_count = json_data['vertexCount']
         self.face_count = json_data['faceCount']
 
-        if 'archives' in json_data and  'gltf' in json_data['archives']:
-            if 'size' in json_data['archives']['gltf'] and json_data['archives']['gltf']['size']:
-                self.download_size = Utils.humanify_size(json_data['archives']['gltf']['size'])
-        else:
-            self.download_size = None
+        gltf = (json_data.get('archives') or {}).get('gltf') or {}
+        size = gltf.get('size')
+        self.download_size = Utils.humanify_size(size) if isinstance(size, (int, float)) and size > 0 else None
 
         self.thumbnail_url = (os.path.join(Config.SKETCHFAB_THUMB_DIR, f'{self.uid}.jpeg')
                               if Config.SKETCHFAB_THUMB_DIR else None)
@@ -1464,7 +1471,9 @@ class SketchfabDownloadModel(bpy.types.Operator):
             if context.mode != 'OBJECT':
                 self.report({'WARNING'}, 'Switch to Object Mode before importing a model')
                 return {'CANCELLED'}
-            title = self.job.metadata.get('name') or self.title
+            title = self.job.metadata.get('name')
+            if not isinstance(title, str) or not title:
+                title = self.title
             import_gltf(self.job.path, title)
             record_download(self.job.metadata, self.job.uid, title)
             return {'FINISHED'}
@@ -1620,10 +1629,8 @@ def activate_plugin():
         login_props.api_token = api_token
         props.skfb_api.login()
 
-    try:
-        requests.get(Config.SKETCHFAB_PLUGIN_VERSION, hooks={'response': check_plugin_version}, timeout=(3, 10))
-    except Exception as e:
-        print('Error when checking for version: {}'.format(e))
+    url = Config.SKETCHFAB_PLUGIN_VERSION
+    queue_json_request(lambda: api_json(url, {}), check_plugin_version)
 
     run_default_search()
 
@@ -1693,7 +1700,6 @@ class SketchfabExportProps(bpy.types.PropertyGroup):
         name="Project",
         items=get_org_projects,
         description="Active project",
-        update=refresh_orgs
     )
 
 
@@ -1955,22 +1961,23 @@ classes = (
     ExportSketchfab,
     )
 
-def check_plugin_version(request, *args, **kwargs):
-    response = request.json()
-    skfb = get_sketchfab_props()
-    if response and len(response):
-        latest_release_version = response[0]['tag_name'].replace('.', '')
-        current_version = str(bl_info['version']).replace(',', '').replace('(', '').replace(')', '').replace(' ', '')
+def check_plugin_version(releases):
+    props = get_sketchfab_props()
+    props.is_latest_version = -2
+    if not isinstance(releases, list):
+        return
+    for release in releases:
+        if not isinstance(release, dict) or release.get('draft') or release.get('prerelease'):
+            continue
+        tag = release.get('tag_name', '')
+        try:
+            version = tuple(int(part) for part in tag.lstrip('v').split('.'))
+        except (AttributeError, ValueError):
+            continue
+        if len(version) == 3:
+            props.is_latest_version = int(version <= bl_info['version'])
+            return
 
-        if latest_release_version == current_version:
-            print('You are using the latest version({})'.format(response[0]['tag_name']))
-            skfb.is_latest_version = 1
-        else:
-            print('A new version is available: {}'.format(response[0]['tag_name']))
-            skfb.is_latest_version = 0
-    else:
-        print('Failed to retrieve plugin version')
-        skfb.is_latest_version = -2
 
 cached_login = CachedLogin(sys.modules[__name__])
 
@@ -2028,7 +2035,7 @@ def record_download(metadata, uid, title):
     license = metadata.get('license')
     if not isinstance(license, dict):
         license = {}
-    url = f'{Config.SKETCHFAB_URL}/models/{uid}'
+    url = metadata.get('viewerUrl') or f'{Config.SKETCHFAB_URL}/models/{uid}'
     username = user.get('username', '')
     license_name = license.get('fullName') or license.get('label') or ''
     if username and license_name:
@@ -2039,7 +2046,10 @@ def record_download(metadata, uid, title):
     else:
         credit = f'"{title}" ({url}). Attribution unavailable.'
     text = bpy.data.texts.get('sf_attributions') or bpy.data.texts.new('sf_attributions')
-    text.cursor_set(len(text.lines) - 1, character=len(text.lines[-1].body))
+    last_line = text.lines[-1].body
+    text.cursor_set(len(text.lines) - 1, character=len(last_line))
+    if last_line:
+        text.write('\n')
     text.write(credit + '\n')
 
     addon = bpy.context.preferences.addons.get(__name__.split('.')[0])
@@ -2073,7 +2083,7 @@ def unregister():
     if hasattr(bpy.app.handlers, 'quit_pre'):
         bpy.app.handlers.quit_pre.remove(cancel_transfers)
     cached_login.unregister()
-    for callback in (poll_search, poll_thumbnails):
+    for callback in (poll_search, poll_thumbnails, poll_json_requests):
         if bpy.app.timers.is_registered(callback):
             bpy.app.timers.unregister(callback)
     is_plugin_enabled = False

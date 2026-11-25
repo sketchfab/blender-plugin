@@ -104,6 +104,46 @@ def tests():
         assert api.is_user_logged()
     checks.append('Cached and manual login work without requests.certs')
 
+    reset(mode='restricted')
+    login.schedule_restore()
+    yield finished
+    uid = 'fdecba9876543210fedcba9876543210'
+    model = {'uid': uid, 'name': 'Fixture', 'vertexCount': 3, 'faceCount': 1,
+             'user': {'username': 'author', 'displayName': 'Author'},
+             'archives': {'gltf': {}}}
+    base = 'http://127.0.0.1:{}/search'.format(port)
+    query = addon.build_search_request('mesh & rig', False, False, False, 'ANY', 'ALL', 'RELEVANCE')
+
+    def search_request(url, headers):
+        assert threading.current_thread() is not threading.main_thread()
+        if url == base + '?page=2':
+            return {'results': [model], 'previous': 'https://unrelated.example/search'}
+        if url == addon.Config.SKETCHFAB_MODEL + '/' + uid:
+            return {'license': {'fullName': 'Fixture license'}, 'animationCount': 1}
+        assert 'q=mesh+%26+rig' in url and 'restricted=1' in url
+        assert headers == {'Authorization': 'Token synthetic-test-token'}
+        return {'results': [model], 'next': '?page=2'}
+
+    with patch.object(addon, 'api_json', search_request), patch.object(addon.Config, 'BASE_SEARCH', base + '?type=models'):
+        api.search(query)
+        yield lambda: api.search_request is None
+        assert api.next_results_url == base + '?page=2'
+        assert bpy.ops.wm.sketchfab_search_next() == {'FINISHED'}
+        yield lambda: api.search_request is None
+        assert api.prev_results_url is None
+        result = addon.get_sketchfab_model(uid)
+        assert result.download_size is None
+        api.request_model_info(result)
+        yield lambda: not addon.background_requests
+        assert result.license == 'Fixture license' and result.animated == 'Yes (1 animation(s))'
+    checks.append('Restricted search, pagination, and model metadata use background requests')
+
+    addon.check_plugin_version([{'tag_name': '2.0.0', 'prerelease': True}, {'tag_name': '1.7.20'}])
+    assert addon.get_sketchfab_props().is_latest_version == 1
+    addon.check_plugin_version([{'tag_name': 'v1.9.0'}])
+    assert addon.get_sketchfab_props().is_latest_version == 0
+    checks.append('Version check ignores prereleases and compares numeric versions')
+
     reset(mode='organizations')
     login.schedule_restore()
     yield finished
@@ -112,30 +152,21 @@ def tests():
 
     org_uid = '0123456789abcdef0123456789abcdef'
     project_uid = 'fedcba9876543210fedcba9876543210'
-    class Response:
-        status_code = 200
-        def __init__(self, payload):
-            self.payload = payload
-        def json(self):
-            return self.payload
-    def organization_request(url, headers, hooks):
+    def organization_request(url, headers):
+        assert threading.current_thread() is not threading.main_thread()
         assert headers == api.headers
         if url == addon.Config.SKETCHFAB_ME + '/orgs':
-            payload = {'results': [{'uid': org_uid, 'displayName': 'Test organization',
-                                   'username': 'test-org', 'publicProfileUrl': 'https://example.invalid/test-org'}],
-                       'next': None}
-        elif url == addon.Config.SKETCHFAB_ORGS + '/' + org_uid + '/projects':
-            payload = {'results': [{'uid': project_uid, 'name': 'Test project', 'slug': 'test-project',
-                                   'org': {'uid': org_uid}, 'modelCount': 1, 'memberCount': 1}], 'next': None}
-        else:
-            raise AssertionError('Unexpected organization request')
-        hooks['response'](Response(payload))
-    old_search = api.search
-    addon.requests.get = organization_request
-    api.search = lambda *args, **kwargs: None
-    addon.get_sketchfab_props_proxy().use_org_profile = True
-    addon.requests.get = unexpected_network
-    api.search = old_search
+            return {'results': [{'uid': org_uid, 'displayName': 'Test organization',
+                                 'username': 'test-org', 'publicProfileUrl': 'https://example.invalid/test-org'}],
+                    'next': None}
+        if url == addon.Config.SKETCHFAB_ORGS + '/' + org_uid + '/projects':
+            return {'results': [{'uid': project_uid, 'name': 'Test project', 'slug': 'test-project',
+                                 'org': {'uid': org_uid}, 'modelCount': 1, 'memberCount': 1}], 'next': None}
+        raise AssertionError('Unexpected organization request')
+
+    with patch.object(api, 'search'), patch.object(addon, 'api_json', organization_request):
+        addon.get_sketchfab_props_proxy().use_org_profile = True
+        yield lambda: not api.orgs_loading
     assert api.active_org['uid'] == org_uid and api.use_org_profile
     assert addon.get_user_orgs(None, None)[0][0] == org_uid
     assert project_uid in [item[0] for item in addon.get_available_search_domains(None, None)]
