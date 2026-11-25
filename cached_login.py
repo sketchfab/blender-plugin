@@ -228,7 +228,7 @@ class CachedLogin:
         elif result['error'] == 'rejected':
             try:
                 if self.addon.Cache.get_key('api_token') == self.token:
-                    self.addon.Cache.delete_key('api_token')
+                    self.addon.Cache.delete_keys('api_token')
             except (OSError, ValueError, TypeError):
                 self.addon.set_login_status('ERROR', 'Invalid API token; could not clear the cached token')
             else:

@@ -30,6 +30,7 @@ from urllib.parse import quote_plus
 from .cached_login import CachedLogin
 from .model_links import MODEL_UID, model_endpoint, parse_model_link
 from .organization_api import fetch_organizations
+from .token_cache import TokenCache
 from .transfers import (DownloadJob, UploadError, UploadJob, api_json, check_cancelled, send_model)
 
 import bpy
@@ -179,17 +180,6 @@ class Utils:
         else:
             return '{}/{}/download'.format(Config.SKETCHFAB_MODEL, uid)
 
-    def thumbnail_file_exists(uid):
-        return os.path.exists(os.path.join(Config.SKETCHFAB_THUMB_DIR, '{}.jpeg'.format(uid)))
-
-    def clean_thumbnail_directory():
-        if not os.path.exists(Config.SKETCHFAB_THUMB_DIR):
-            return
-
-        from os import listdir
-        for file in listdir(Config.SKETCHFAB_THUMB_DIR):
-            os.remove(os.path.join(Config.SKETCHFAB_THUMB_DIR, file))
-
     def get_thumbnail_url(thumbnails_json):
         min_height  = 1e6
         min_thumbnail = None
@@ -207,13 +197,6 @@ class Utils:
         if best_thumbnail is None and min_thumbnail is not None:
             return min_thumbnail
         return best_thumbnail
-
-    def setup_plugin():
-        if not os.path.exists(Config.SKETCHFAB_THUMB_DIR):
-            os.makedirs(Config.SKETCHFAB_THUMB_DIR)
-
-    def get_uid_from_thumbnail_url(thumbnail_url):
-        return thumbnail_url.split('/')[4]
 
     def get_uid_from_model_url(model_url, use_org_profile=False):
         try:
@@ -243,38 +226,9 @@ class Utils:
         root.name = root_name
         root.select_set(True)
 
-class Cache:
+class Cache(TokenCache):
     SKETCHFAB_CACHE_FILE = os.path.join(
-        bpy.utils.user_resource("SCRIPTS", path="sketchfab_cache", create=True),
-        ".cache"
-    ) # Use a user path to avoid permission-related errors
-
-    def read():
-        if not os.path.exists(Cache.SKETCHFAB_CACHE_FILE):
-            return {}
-
-        with open(Cache.SKETCHFAB_CACHE_FILE, 'rb') as f:
-            data = f.read().decode('utf-8')
-            return json.loads(data)
-
-    def get_key(key):
-        cache_data = Cache.read()
-        if key in cache_data:
-            return cache_data[key]
-
-    def save_key(key, value):
-        cache_data = Cache.read()
-        cache_data[key] = value
-        with open(Cache.SKETCHFAB_CACHE_FILE, 'wb+') as f:
-            f.write(json.dumps(cache_data).encode('utf-8'))
-
-    def delete_key(key):
-        cache_data = Cache.read()
-        if key in cache_data:
-            del cache_data[key]
-
-        with open(Cache.SKETCHFAB_CACHE_FILE, 'wb+') as f:
-            f.write(json.dumps(cache_data).encode('utf-8'))
+        bpy.utils.user_resource('SCRIPTS', path='sketchfab_cache', create=True), '.cache')
 
 
 # helpers
@@ -396,12 +350,10 @@ class SketchfabApi:
     def logout(self):
         cached_login.cancel()
         cached_login.reset_account()
-        Cache.delete_key('api_token')
-        # Versions up to 1.6.1 cached an OAuth 'access_token' and the account
-        # email under 'username'. Neither is written any more, but purge both so
-        # credentials and personal data left behind by an upgrade do not linger.
-        Cache.delete_key('access_token')
-        Cache.delete_key('username')
+        try:
+            Cache.delete_keys('api_token', 'access_token', 'username')
+        except OSError:
+            set_login_status('ERROR', 'Logged out. Could not remove the cached API token.')
 
         props = get_sketchfab_props()
         pprops = get_sketchfab_props_proxy()
@@ -434,7 +386,7 @@ class SketchfabApi:
             if r.status_code == requests.codes.unauthorized:
                 # The token itself was rejected, so drop it from the cache. Left
                 # there, a dead token is restored and retried on every start.
-                Cache.delete_key('api_token')
+                Cache.delete_keys('api_token')
                 print('\nInvalid API token\nYou can get your API token here:\nhttps://sketchfab.com/settings/password\n')
                 ShowMessage("ERROR", "Failed to authenticate", "Invalid API token")
             else:
@@ -468,7 +420,7 @@ class SketchfabApi:
         self.user_has_orgs = bool((r.status_code == 200) and len(r.json().get("results", [])))
 
     def request_thumbnail(self, thumbnails_json, path):
-        if path not in thumbnail_requests and not os.path.isfile(path):
+        if path and path not in thumbnail_requests and not os.path.isfile(path):
             url = Utils.get_thumbnail_url(thumbnails_json)
             if url:
                 request = ThumbnailCollector(url)
@@ -1004,7 +956,7 @@ def poll_thumbnails():
     skfb = get_sketchfab_props()
     updated = False
     for uid, model in skfb.search_results.get('current', {}).items():
-        if uid not in skfb.custom_icons and os.path.isfile(model.thumbnail_url):
+        if uid not in skfb.custom_icons and model.thumbnail_url and os.path.isfile(model.thumbnail_url):
             try:
                 skfb.custom_icons.load(uid, model.thumbnail_url, 'IMAGE')
                 updated = True
@@ -1400,8 +1352,8 @@ class SketchfabLogger(bpy.types.Operator):
         if self.authenticate:
             wm.sketchfab_browser.skfb_api.login()
         else:
+            set_login_status('INFO', '')
             wm.sketchfab_browser.skfb_api.logout()
-            set_login_status('FILE_REFRESH', '')
         return {'FINISHED'}
 
 
@@ -1411,6 +1363,8 @@ class SketchfabModel:
         self.author = json_data['user']['displayName']
         self.username = json_data['user']['username']
         self.uid = json_data['uid']
+        if not MODEL_UID.fullmatch(self.uid):
+            raise ValueError('Invalid model ID in search results')
         self.vertex_count = json_data['vertexCount']
         self.face_count = json_data['faceCount']
 
@@ -1420,7 +1374,8 @@ class SketchfabModel:
         else:
             self.download_size = None
 
-        self.thumbnail_url = os.path.join(Config.SKETCHFAB_THUMB_DIR, '{}.jpeg'.format(self.uid))
+        self.thumbnail_url = (os.path.join(Config.SKETCHFAB_THUMB_DIR, f'{self.uid}.jpeg')
+                              if Config.SKETCHFAB_THUMB_DIR else None)
 
         # Model info request
         self.info_requested = False
@@ -1905,38 +1860,17 @@ class ExportSketchfab(bpy.types.Operator):
 
 
 def get_temporary_path():
+    preferences = bpy.context.preferences
+    addon = preferences.addons.get(__name__.split('.')[0])
+    configured = addon.preferences.cachePath if addon else ''
+    configured = configured or preferences.filepaths.temporary_directory
+    if configured:
+        return bpy.path.abspath(os.path.expanduser(configured))
+    return bpy.app.tempdir or tempfile.gettempdir()
 
-    # Get the preferences cache directory
-    cachePath = bpy.context.preferences.addons[__name__.split('.')[0]].preferences.cachePath
-
-    # The cachePath was set in the preferences
-    if cachePath:
-        return cachePath
-    else:
-        # Rely on Blender temporary directory
-        if bpy.app.version == (2, 79, 0):
-            if bpy.context.user_preferences.filepaths.temporary_directory:
-                return bpy.context.user_preferences.filepaths.temporary_directory
-            else:
-                return tempfile.mkdtemp()
-        else:
-            if bpy.context.preferences.filepaths.temporary_directory:
-                return bpy.context.preferences.filepaths.temporary_directory
-            else:
-                return tempfile.mkdtemp()
 
 def updateCacheDirectory(self, context):
-
-    # Get the cache path from the preferences, or a default temporary
     path = os.path.abspath(get_temporary_path())
-
-    # Delete the old directory
-    # Won't delete anything upon plugin intialization, only when switching path in preferences
-    if Config.SKETCHFAB_TEMP_DIR and os.path.exists(Config.SKETCHFAB_TEMP_DIR) and os.path.isdir(Config.SKETCHFAB_TEMP_DIR):
-        try:
-            shutil.rmtree(Config.SKETCHFAB_TEMP_DIR)
-        except OSError as err:
-            print("Sketchfab: could not remove old cache directory '{}': {}".format(Config.SKETCHFAB_TEMP_DIR, err))
 
     # Create the temporary directories. If the configured path can't be created
     # (missing drive, permission denied, unusual characters, ...) fall back to the
@@ -1951,6 +1885,8 @@ def updateCacheDirectory(self, context):
         except OSError as err:
             print("Sketchfab: cannot use cache directory '{}': {}".format(candidate, err))
             continue
+        if Config.SKETCHFAB_THUMB_DIR != thumb_dir:
+            thumbnail_requests.clear()
         Config.SKETCHFAB_TEMP_DIR  = temp_dir
         Config.SKETCHFAB_THUMB_DIR = thumb_dir
         Config.SKETCHFAB_MODEL_DIR = model_dir
@@ -2153,7 +2089,6 @@ def unregister():
 
     bpy.utils.previews.remove(preview_collection['skfb'])
     del bpy.types.WindowManager.result_previews
-    Utils.clean_thumbnail_directory()
 
 
 if __name__ == "__main__":

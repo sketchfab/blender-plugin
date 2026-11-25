@@ -23,6 +23,13 @@ spec.loader.exec_module(addon)
 addon.Cache.SKETCHFAB_CACHE_FILE = str(WORK / 'synthetic.cache')
 addon.get_temporary_path = lambda: str(WORK / 'downloads')
 addon.register()
+old_cache = Path(addon.Config.SKETCHFAB_THUMB_DIR)
+sentinel = old_cache / 'unmanaged.txt'
+sentinel.write_text('keep this file')
+addon.get_temporary_path = lambda: str(WORK / 'downloads-other')
+addon.updateCacheDirectory(None, bpy.context)
+assert sentinel.read_text() == 'keep this file'
+assert old_cache != Path(addon.Config.SKETCHFAB_THUMB_DIR)
 login = addon.cached_login
 checks = []
 
@@ -225,7 +232,11 @@ def tests():
     login.schedule_restore()
     yield finished
     assert not addon.is_plugin_enabled
-    checks.append('Corrupt cache does not abort registration')
+    addon.get_sketchfab_login_props().api_token = 'synthetic-test-token'
+    api.login()
+    yield finished
+    assert api.is_user_logged()
+    checks.append('Manual login repairs a corrupt cache')
 
     reset()
     addon.get_sketchfab_login_props().api_token = 'synthetic-test-token'
