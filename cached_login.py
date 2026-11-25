@@ -47,6 +47,9 @@ class CachedLogin:
         return self.job is not None
 
     def interpreter(self):
+        reported = getattr(self.addon.bpy.app, 'binary_path_python', None)
+        if reported and Path(reported).is_file():
+            return reported
         name = 'python.exe' if os.name == 'nt' else 'python{}.{}'.format(*sys.version_info[:2])
         binary = Path(sys.prefix) / 'bin' / name
         return str(binary) if binary.is_file() else None
