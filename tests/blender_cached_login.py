@@ -8,6 +8,7 @@ import threading
 import time
 from types import SimpleNamespace
 from unittest.mock import patch
+from urllib.parse import parse_qs, urlsplit
 
 import bpy
 
@@ -23,6 +24,13 @@ spec.loader.exec_module(addon)
 addon.Cache.SKETCHFAB_CACHE_FILE = str(WORK / 'synthetic.cache')
 addon.get_temporary_path = lambda: str(WORK / 'downloads')
 addon.register()
+old_cache = Path(addon.Config.SKETCHFAB_THUMB_DIR)
+sentinel = old_cache / 'unmanaged.txt'
+sentinel.write_text('keep this file')
+addon.get_temporary_path = lambda: str(WORK / 'downloads-other')
+addon.updateCacheDirectory(None, bpy.context)
+assert sentinel.read_text() == 'keep this file'
+assert old_cache != Path(addon.Config.SKETCHFAB_THUMB_DIR)
 login = addon.cached_login
 checks = []
 
@@ -97,6 +105,38 @@ def tests():
         assert api.is_user_logged()
     checks.append('Cached and manual login work without requests.certs')
 
+    reset(mode='restricted')
+    login.schedule_restore()
+    yield finished
+    uid = 'fdecba9876543210fedcba9876543210'
+    base = 'http://127.0.0.1:{}'.format(port)
+    query = addon.build_search_request('mesh & rig', False, False, False, 'ANY', 'ALL', 'RELEVANCE')
+
+    with patch.object(addon.Config, 'BASE_SEARCH', base + '/search?type=models'), \
+            patch.object(addon.Config, 'SKETCHFAB_MODEL', base + '/models'):
+        api.search(query)
+        request = api.search_request
+        assert request.process.pid != os.getpid()
+        yield lambda: api.search_request is None
+        assert api.next_results_url == base + '/search?page=2'
+        yield lambda: addon.thumbnail_request is None and uid in addon.get_sketchfab_props().custom_icons
+        assert bpy.ops.wm.sketchfab_search_next() == {'FINISHED'}
+        yield lambda: api.search_request is None
+        assert api.prev_results_url is None
+        result = addon.get_sketchfab_model(uid)
+        assert result.download_size is None
+        api.request_model_info(result)
+        yield lambda: not addon.background_requests
+        assert result.license == 'Fixture license' and result.animated == 'Yes (1 animation(s))'
+    checks.append('Restricted search, pagination, and model metadata use background requests')
+
+    addon.check_plugin_version([{'tag_name': '2.0.0', 'prerelease': True}, {'tag_name': '1.7.20'}])
+    assert addon.get_sketchfab_props().is_latest_version == 1
+    major, minor, _ = addon.bl_info['version']
+    addon.check_plugin_version([{'tag_name': f'v{major}.{minor + 1}.0'}])
+    assert addon.get_sketchfab_props().is_latest_version == 0
+    checks.append('Version check ignores prereleases and compares numeric versions')
+
     reset(mode='organizations')
     login.schedule_restore()
     yield finished
@@ -105,34 +145,65 @@ def tests():
 
     org_uid = '0123456789abcdef0123456789abcdef'
     project_uid = 'fedcba9876543210fedcba9876543210'
-    class Response:
-        status_code = 200
-        def __init__(self, payload):
-            self.payload = payload
-        def json(self):
-            return self.payload
-    def organization_request(url, headers, hooks):
-        assert headers == api.headers
-        if url == addon.Config.SKETCHFAB_ME + '/orgs':
-            payload = {'results': [{'uid': org_uid, 'displayName': 'Test organization',
-                                   'username': 'test-org', 'publicProfileUrl': 'https://example.invalid/test-org'}],
-                       'next': None}
-        elif url == addon.Config.SKETCHFAB_ORGS + '/' + org_uid + '/projects':
-            payload = {'results': [{'uid': project_uid, 'name': 'Test project', 'slug': 'test-project',
-                                   'org': {'uid': org_uid}, 'modelCount': 1, 'memberCount': 1}], 'next': None}
+    second_org = '1' * 32
+    second_project = '2' * 32
+    export = bpy.context.window_manager.sketchfab_export
+    proxy = addon.get_sketchfab_props_proxy()
+    with patch.object(api, 'search'), patch.object(addon.Config, 'SKETCHFAB_ORGS', base + '/fixture-teams'):
+        proxy.use_org_profile = True
+        yield lambda: not addon.background_requests
+        assert api.active_org['uid'] == org_uid and api.use_org_profile
+        assert addon.get_user_orgs(None, None)[0][0] == org_uid
+        assert project_uid in [item[0] for item in addon.get_available_search_domains(None, None)]
+        assert not api.user_orgs[1].get('projects_state')
+        checks.append('Organization toggle loads memberships and the selected Team’s projects')
+
+        export.active_project = project_uid
+        proxy.active_org = second_org
+        assert export.active_project == 'NO_PROJECT'
+        yield lambda: not addon.background_requests
+        assert api.active_org['projects_state'] == 'failed'
+        assert api.orgs_loaded and api.use_org_profile and not api.orgs_check_failed
+        proxy.active_org = org_uid
+        assert project_uid in [item[0] for item in addon.get_available_search_domains(None, None)]
+        proxy.active_org = second_org
+        assert bpy.ops.wm.sketchfab_retry_projects() == {'FINISHED'}
+        yield lambda: not addon.background_requests
+        assert second_project in [item[0] for item in addon.get_available_search_domains(None, None)]
+        checks.append('A project failure is local to its Team and can be retried')
+
+        try:
+            addon.capture_upload(bpy.context, api)
+        except ValueError as error:
+            assert 'Select a project' in str(error)
         else:
-            raise AssertionError('Unexpected organization request')
-        hooks['response'](Response(payload))
-    old_search = api.search
-    addon.requests.get = organization_request
-    api.search = lambda *args, **kwargs: None
-    addon.get_sketchfab_props_proxy().use_org_profile = True
-    addon.requests.get = unexpected_network
-    api.search = old_search
-    assert api.active_org['uid'] == org_uid and api.use_org_profile
-    assert addon.get_user_orgs(None, None)[0][0] == org_uid
-    assert project_uid in [item[0] for item in addon.get_available_search_domains(None, None)]
-    checks.append('Organization toggle still loads organizations and projects with the same token')
+            raise AssertionError('A Team upload requires an explicitly selected project')
+    export.active_project = second_project
+    (params, _, _), plan = addon.capture_upload(bpy.context, api)
+    assert params['fields']['orgProject'] == second_project and plan == 'ent'
+    checks.append('Switching Teams clears the upload project and requires a fresh selection')
+
+    searches = []
+    with patch.object(api, 'start_search', searches.append):
+        proxy.use_org_profile = False
+        proxy.query = 'test mesh'
+        proxy.sort_by = 'RECENT'
+        proxy.face_count = '10K'
+        proxy.categories = 'animals-pets'
+        proxy.pbr = proxy.staffpick = proxy.animated = True
+        assert parse_qs(urlsplit(searches[-1]).query)['sort_by'] == ['-publishedAt']
+        proxy.use_org_profile = True
+        assert proxy.sort_by == 'RECENT'
+        team_query = parse_qs(urlsplit(searches[-1]).query)
+        assert team_query == {'isArchivesReady': ['true'], 'q': ['test mesh'],
+                              'sort_by': ['-createdAt'], 'max_face_count': ['10000']}
+        proxy.use_org_profile = False
+        proxy.search_domain = 'STORE'
+        assert parse_qs(urlsplit(searches[-1]).query) == {'type': ['models'], 'q': ['test mesh']}
+        proxy.sort_by = 'LIKES'
+        proxy.use_org_profile = True
+        assert proxy.sort_by == 'RELEVANCE'
+    checks.append('Team and purchase search requests use their own filters and sort choices')
 
     reset(mode='org-failure')
     login.schedule_restore()
@@ -205,9 +276,13 @@ def tests():
     login.interpreter = lambda: None
     login.schedule_restore()
     yield finished
-    login.interpreter = binary
     assert not addon.is_plugin_enabled
-    checks.append('Unavailable interpreter retains manual activation')
+    addon.get_sketchfab_login_props().api_token = 'synthetic-test-token'
+    api.login()
+    yield lambda: not addon.background_requests
+    login.interpreter = binary
+    assert api.is_user_logged()
+    checks.append('Manual login uses a background Blender process when standalone Python is unavailable')
 
     reset()
     original_popen = subprocess.Popen
@@ -225,7 +300,11 @@ def tests():
     login.schedule_restore()
     yield finished
     assert not addon.is_plugin_enabled
-    checks.append('Corrupt cache does not abort registration')
+    addon.get_sketchfab_login_props().api_token = 'synthetic-test-token'
+    api.login()
+    yield finished
+    assert api.is_user_logged()
+    checks.append('Manual login repairs a corrupt cache')
 
     reset()
     addon.get_sketchfab_login_props().api_token = 'synthetic-test-token'

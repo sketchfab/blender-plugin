@@ -31,6 +31,7 @@ def verify_login(args):
         raise ValueError('Invalid account data')
     if not fields['username'] or not fields['account']:
         raise ValueError('Missing account data')
+    fields['allows_restricted'] = user.get('allowsRestricted') is True
 
     try:
         orgs = fetch(opener, args['url'] + '/orgs', args['token'])
