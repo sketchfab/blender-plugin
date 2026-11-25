@@ -8,6 +8,7 @@ import threading
 import time
 from types import SimpleNamespace
 from unittest.mock import patch
+from urllib.parse import parse_qs, urlsplit
 
 import bpy
 
@@ -171,6 +172,29 @@ def tests():
     (params, _, _), plan = addon.capture_upload(bpy.context, api)
     assert params['fields']['orgProject'] == second_project and plan == 'ent'
     checks.append('Switching Teams clears the upload project and requires a fresh selection')
+
+    proxy = addon.get_sketchfab_props_proxy()
+    searches = []
+    with patch.object(api, 'start_search', searches.append):
+        proxy.use_org_profile = False
+        proxy.query = 'test mesh'
+        proxy.sort_by = 'RECENT'
+        proxy.face_count = '10K'
+        proxy.categories = 'animals-pets'
+        proxy.pbr = proxy.staffpick = proxy.animated = True
+        assert parse_qs(urlsplit(searches[-1]).query)['sort_by'] == ['-publishedAt']
+        proxy.use_org_profile = True
+        assert proxy.sort_by == 'RECENT'
+        team_query = parse_qs(urlsplit(searches[-1]).query)
+        assert team_query == {'isArchivesReady': ['true'], 'q': ['test mesh'],
+                              'sort_by': ['-createdAt'], 'max_face_count': ['10000']}
+        proxy.use_org_profile = False
+        proxy.search_domain = 'STORE'
+        assert parse_qs(urlsplit(searches[-1]).query) == {'type': ['models'], 'q': ['test mesh']}
+        proxy.sort_by = 'LIKES'
+        proxy.use_org_profile = True
+        assert proxy.sort_by == 'RELEVANCE'
+    checks.append('Team and purchase search requests use their own filters and sort choices')
 
     reset(mode='org-failure')
     login.schedule_restore()

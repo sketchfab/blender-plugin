@@ -124,10 +124,10 @@ class Config:
                            ('250K', "100k to 250k", ""),
                            ('250KP', "250k +", ""))
 
-    SKETCHFAB_SORT_BY = (('RELEVANCE', "Relevance", ""),
-                         ('LIKES', "Likes", ""),
-                         ('VIEWS', "Views", ""),
-                         ('RECENT', "Recent", ""))
+    SKETCHFAB_SORT_BY = (('RELEVANCE', "Relevance", "", 0),
+                         ('LIKES', "Likes", "", 1),
+                         ('VIEWS', "Views", "", 2),
+                         ('RECENT', "Recent", "", 3))
 
     SKETCHFAB_SEARCH_DOMAIN = (('DEFAULT', "All site", "", 0),
                                ('OWN', "Own Models (PRO)", "", 1),
@@ -517,6 +517,7 @@ def refresh_orgs(self, context):
         api.request_user_orgs()
         return
 
+    sort_by = pprops.sort_by
     previous_org = api.active_org
     if api.user_orgs:
         api.active_org = next((org for org in api.user_orgs if org["uid"] == pprops.active_org), api.user_orgs[0])
@@ -532,6 +533,10 @@ def refresh_orgs(self, context):
     try:
         props.search_domain = domain
         pprops.search_domain = domain
+        if sort_by not in {item[0] for item in get_sorting_options(None, context)}:
+            sort_by = 'RELEVANCE'
+        props.sort_by = sort_by
+        pprops.sort_by = sort_by
     finally:
         pprops.is_refreshing = False
     refresh_search(self, context)
@@ -540,12 +545,8 @@ def refresh_orgs(self, context):
 def get_sorting_options(self, context):
     api = get_sketchfab_props().skfb_api
     if api.user_has_orgs and api.use_org_profile:
-        return (
-            ('RELEVANCE', "Relevance", ""),
-            ('RECENT', "Recent", "")
-        )
-    else:
-        return Config.SKETCHFAB_SORT_BY
+        return tuple(item for item in Config.SKETCHFAB_SORT_BY if item[0] in {'RELEVANCE', 'RECENT'})
+    return Config.SKETCHFAB_SORT_BY
 
 class SketchfabBrowserPropsProxy(bpy.types.PropertyGroup):
     # Search
@@ -823,20 +824,23 @@ def import_gltf(path, title):
     Utils.clean_node_hierarchy([obj for obj in bpy.context.scene.objects if obj not in old_objects], title)
 
 
-def build_search_request(query, pbr, animated, staffpick, face_count, category, sort_by):
+def build_search_request(query, pbr, animated, staffpick, face_count, category, sort_by, domain='DEFAULT'):
     final_query = '&q={}'.format(quote_plus(query)) if query else ''
+    if domain == 'STORE':
+        return final_query
+    personal = domain in {'DEFAULT', 'OWN'}
 
-    if animated:
+    if personal and animated:
         final_query = final_query + '&animated=true'
 
-    if staffpick:
+    if personal and staffpick:
         final_query = final_query + '&staffpicked=true'
 
-    if sort_by == 'LIKES':
+    if personal and sort_by == 'LIKES':
         final_query = final_query + '&sort_by=-likeCount'
     elif sort_by == 'RECENT':
-        final_query = final_query + '&sort_by=-publishedAt'
-    elif sort_by == 'VIEWS':
+        final_query += '&sort_by=-publishedAt' if personal else '&sort_by=-createdAt'
+    elif personal and sort_by == 'VIEWS':
         final_query = final_query + '&sort_by=-viewCount'
 
     if face_count == '10K':
@@ -850,10 +854,10 @@ def build_search_request(query, pbr, animated, staffpick, face_count, category, 
     elif face_count == '250KP':
         final_query = final_query + "&min_face_count=250000"
 
-    if category != 'ALL':
+    if personal and category != 'ALL':
         final_query = final_query + '&categories={}'.format(category)
 
-    if pbr:
+    if personal and pbr:
         final_query = final_query + '&pbr_type=metalness'
 
     return final_query
@@ -1503,7 +1507,8 @@ class SketchfabSearch(bpy.types.Operator):
         skfb = get_sketchfab_props()
         skfb.skfb_api.prev_results_url = None
         skfb.skfb_api.next_results_url = None
-        final_query = build_search_request(skfb.query, skfb.pbr, skfb.animated, skfb.staffpick, skfb.face_count, skfb.categories, skfb.sort_by)
+        final_query = build_search_request(skfb.query, skfb.pbr, skfb.animated, skfb.staffpick,
+                                           skfb.face_count, skfb.categories, skfb.sort_by, skfb.search_domain)
         skfb.skfb_api.search(final_query)
         return {'FINISHED'}
 
