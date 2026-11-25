@@ -33,6 +33,19 @@ addon.Utils.clean_node_hierarchy([root, cube], 'Flattened Cube')
 bpy.context.view_layer.update()
 assert cube.parent is None and world == cube.matrix_world
 
+root = bpy.data.objects.new('Scaled Root', None)
+bpy.context.scene.collection.objects.link(root)
+root.scale = (3, 1, 1)
+cube.parent = root
+cube.rotation_mode = 'XYZ'
+cube.rotation_euler.z = 0.65
+bpy.context.view_layer.update()
+world = cube.matrix_world.copy()
+addon.Utils.clean_node_hierarchy([root, cube], 'Preserved Scale')
+bpy.context.view_layer.update()
+assert cube.parent == root and cube.matrix_world == world
+bpy.data.objects.remove(root, do_unlink=True)
+
 root = bpy.data.objects.new('Animated Root', None)
 bpy.context.scene.collection.objects.link(root)
 cube.parent = root

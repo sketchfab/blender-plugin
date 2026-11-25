@@ -15,6 +15,7 @@ limitations under the License.
 """
 
 import csv
+import math
 import os
 import requests
 import time
@@ -32,6 +33,7 @@ from .worker_process import WorkerJob, reap_workers, retired_workers
 
 import bpy
 import bpy.utils.previews
+from mathutils import Matrix
 from bpy.props import (StringProperty,
                        EnumProperty,
                        BoolProperty,
@@ -207,6 +209,12 @@ class Utils:
             if child.animation_data or child.constraints:
                 break
             matrix = child.matrix_world.copy()
+            _, rotation, scale = matrix.decompose()
+            linear = rotation.to_matrix() @ Matrix.Diagonal(scale)
+            # Unparented object transforms cannot represent shear.
+            if any(not math.isclose(matrix[row][col], linear[row][col], rel_tol=1e-5, abs_tol=1e-6)
+                   for row in range(3) for col in range(3)):
+                break
             child.parent = None
             child.matrix_world = matrix
             bpy.data.objects.remove(root, do_unlink=True)
