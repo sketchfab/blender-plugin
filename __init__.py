@@ -14,6 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 """
 
+import csv
 import os
 import requests
 import threading
@@ -29,6 +30,7 @@ from urllib.parse import quote_plus
 from .cached_login import CachedLogin
 from .model_links import MODEL_UID, model_endpoint, parse_model_link
 from .organization_api import fetch_organizations
+from .transfers import DownloadJob
 
 import bpy
 import bpy.utils.previews
@@ -60,6 +62,7 @@ bl_info['blender'] = getattr(bpy.app, "version")
 PLUGIN_VERSION = str(bl_info['version']).strip('() ').replace(',', '.')
 preview_collection = {}
 thumbnail_requests = {}
+active_download = None
 is_plugin_enabled = False
 
 
@@ -185,9 +188,6 @@ class Utils:
         for file in listdir(Config.SKETCHFAB_THUMB_DIR):
             os.remove(os.path.join(Config.SKETCHFAB_THUMB_DIR, file))
 
-    def clean_downloaded_model_dir(uid):
-        shutil.rmtree(os.path.join(Config.SKETCHFAB_MODEL_DIR, uid))
-
     def get_thumbnail_url(thumbnails_json):
         min_height  = 1e6
         min_thumbnail = None
@@ -220,56 +220,25 @@ class Utils:
             ShowMessage("ERROR", "Url parsing error", "Error getting uid from url: {}".format(model_url))
             return None
 
-    def get_uid_from_download_url(model_url):
-        return model_url.split('/')[6]
-
     def clean_node_hierarchy(objects, root_name):
-        """
-        Removes the useless nodes in a hierarchy
-        TODO: Keep the transform (might impact Yup/Zup)
-        """
-        # Find the parent object
-        root = None
-        for object in objects:
-            if object.parent is None:
-                root = object
-        if root is None:
-            return None
-
-        # Go down its hierarchy until one child has multiple children, or a single mesh
-        # Keep the name while deleting objects in the hierarchy
-        diverges = False
-        while diverges==False:
-            children = root.children
-            if children is not None:
-
-                if len(children)>1:
-                    diverges = True
-                    root.name = root_name
-
-                if len(children)==1:
-                    if children[0].type != "EMPTY":
-                        diverges = True
-                        root.name = root_name
-                        if children[0].type == "MESH": # should always be the case
-                            matrixcopy = children[0].matrix_world.copy()
-                            children[0].parent = None
-                            children[0].matrix_world = matrixcopy
-                            bpy.data.objects.remove(root)
-                            children[0].name = root_name
-                            root = children[0]
-
-                    elif children[0].type == "EMPTY":
-                        diverges = False
-                        matrixcopy = children[0].matrix_world.copy()
-                        children[0].parent = None
-                        children[0].matrix_world = matrixcopy
-                        bpy.data.objects.remove(root)
-                        root = children[0]
-            else:
+        roots = [obj for obj in objects if obj.parent is None]
+        if len(roots) != 1:
+            return
+        root = roots[0]
+        while (root.type == 'EMPTY' and len(root.children) == 1
+               and root.children[0].type in {'EMPTY', 'MESH'}
+               and not (root.animation_data or root.constraints or root.instance_type != 'NONE'
+                        or root.keys() or root.users > len(root.users_collection) + 1)):
+            child = root.children[0]
+            if child.animation_data or child.constraints:
                 break
+            matrix = child.matrix_world.copy()
+            child.parent = None
+            child.matrix_world = matrix
+            bpy.data.objects.remove(root, do_unlink=True)
+            root = child
 
-        # Select the root Empty node
+        root.name = root_name
         root.select_set(True)
 
 class Cache:
@@ -369,11 +338,6 @@ def set_login_status(status_type, status):
     login_props = get_sketchfab_login_props()
     login_props.status = status
     login_props.status_type = status_type
-
-
-def set_import_status(status):
-    props = get_sketchfab_props()
-    props.import_status = status
 
 
 class SketchfabApi:
@@ -570,113 +534,6 @@ class SketchfabApi:
         if not bpy.app.timers.is_registered(poll_search):
             bpy.app.timers.register(poll_search, first_interval=0.05)
         redraw_sketchfab()
-
-    def write_model_info(self, title, author, authorUrl, license, uid):
-        try:
-            downloadHistory = bpy.context.preferences.addons[__name__.split('.')[0]].preferences.downloadHistory
-            if downloadHistory != "":
-                downloadHistory = os.path.abspath(downloadHistory)
-                createFile = False
-                if not os.path.exists(downloadHistory):
-                    createFile = True
-                with open(downloadHistory, 'a+') as f:
-                    if createFile:
-                        f.write("Model name, Author name, Author url, License, Model link,\n")
-                    f.write("{}, {}, https://sketchfab.com/{}, {}, https://sketchfab.com/models/{},\n".format(
-                        title.replace(",", " "),
-                        author.replace(",", " "),
-                        authorUrl.replace(",", " "),
-                        license.replace(",", " "),
-                        uid
-                    ))
-        except:
-            print("Error encountered while saving data to history file")
-
-    def parse_model_info_request(self, r, *args, **kargs):
-        try:
-            if r.status_code == 200:
-                result = r.json()
-                title = result['name']
-                author = result['user']['displayName']
-                username = result['user']['username']
-                license = result["license"]["label"]
-                uid = result['uid']
-                self.write_model_info(title, author, username, license, uid)
-            else:
-                print("Error encountered while getting model info ({})\n{}\n{}".format(r.status_code, r.url, str(r.json())))
-        except:
-            print("Error encountered while parsing model info request: {}".format(r.url))
-
-    def download_model(self, uid, link):
-        path = None
-        if link:
-            uid, organization = parse_model_link(link)
-            if organization:
-                self.request_user_orgs()
-            path = model_endpoint(Config.SKETCHFAB_MODEL, Config.SKETCHFAB_ORGS, uid,
-                                  organization, self.user_orgs)
-        elif self.use_org_profile and self.active_org:
-            path = f'{Config.SKETCHFAB_ORGS}/{self.active_org["uid"]}/models/{uid}'
-        else:
-            path = model_endpoint(Config.SKETCHFAB_MODEL, Config.SKETCHFAB_ORGS, uid)
-
-        model = None if link else get_sketchfab_model(uid)
-        if model is None:
-            requests.get(path, headers=self.headers, hooks={'response': self.parse_model_info_request},
-                         timeout=(3, 10))
-        else:
-            self.write_model_info(model.title, model.author, model.username, model.license, uid)
-        response = requests.get(path + '/download', headers=self.headers, timeout=(3, 10))
-        if response.status_code != 200 or 'gltf' not in response.json():
-            raise ValueError('This model is not downloadable with your Sketchfab account')
-        self.get_archive(response.json()['gltf']['url'], model.title if model else 'Sketchfab Model')
-
-    def get_archive(self, url, title):
-        if url is None:
-            print('Url is None')
-            return
-
-        r = requests.get(url, stream=True)
-        uid = Utils.get_uid_from_download_url(url)
-        temp_dir = os.path.join(Config.SKETCHFAB_MODEL_DIR, uid)
-        if not os.path.exists(temp_dir):
-            os.makedirs(temp_dir)
-
-        archive_path = os.path.join(temp_dir, '{}.zip'.format(uid))
-        if not os.path.exists(archive_path):
-            wm = bpy.context.window_manager
-            wm.progress_begin(0, 100)
-            set_log("Downloading model..")
-            with open(archive_path, "wb") as f:
-                total_length = r.headers.get('content-length')
-                if total_length is None:  # no content length header
-                    f.write(r.content)
-                else:
-                    dl = 0
-                    total_length = int(total_length)
-                    for data in r.iter_content(chunk_size=4096):
-                        dl += len(data)
-                        f.write(data)
-                        done = int(100 * dl / total_length)
-                        wm.progress_update(done)
-                        set_log("Downloading model..{}%".format(done))
-
-            wm.progress_end()
-        else:
-            print('Model already downloaded')
-
-        gltf_path, gltf_zip = unzip_archive(archive_path)
-        if gltf_path:
-            try:
-                import_model(gltf_path, uid, title)
-            except Exception as e:
-                import traceback
-                print(traceback.format_exc())
-        else:
-            ShowMessage("ERROR", "Download error", "Failed to download model (url might be invalid)")
-            model = get_sketchfab_model(uid)
-            set_import_status("Import model ({})".format(model.download_size if model.download_size else 'fetching data'))
-        return
 
 class SketchfabLoginProps(bpy.types.PropertyGroup):
     api_token : StringProperty(
@@ -904,8 +761,6 @@ class SketchfabBrowserProps(bpy.types.PropertyGroup):
         description="Active org",
     )
 
-    status : StringProperty(name='status', default='idle')
-
     use_preview : BoolProperty(
         name="Use Preview",
         description="Show results using preview widget instead of regular buttons with thumbnails as icons",
@@ -922,8 +777,6 @@ class SketchfabBrowserProps(bpy.types.PropertyGroup):
     has_loaded_thumbnails : BoolProperty(default=False)
 
     is_latest_version : IntProperty(default=-1)
-
-    import_status : StringProperty(name='import', default='')
 
     manualImportBoolean : BoolProperty(
             name="Import from url",
@@ -1003,63 +856,39 @@ def draw_import_button(layout, model, context):
     import_ops = layout.row()
     skfb = get_sketchfab_props()
 
-    import_ops.enabled = skfb.skfb_api.is_user_logged() and bpy.context.mode == 'OBJECT' and bool(MODEL_UID.fullmatch(model.uid))
-    if not skfb.skfb_api.is_user_logged():
+    import_ops.enabled = (active_download is None and skfb.skfb_api.is_user_logged()
+                          and context.mode == 'OBJECT' and bool(MODEL_UID.fullmatch(model.uid)))
+    if active_download is not None:
+        progress = active_download.job.progress
+        if progress is None:
+            downloadlabel = 'Downloading model…'
+        elif progress < 100:
+            downloadlabel = f'Downloading model… {progress}%'
+        else:
+            downloadlabel = 'Preparing model…'
+    elif not skfb.skfb_api.is_user_logged():
         downloadlabel = 'Log in to download models'
-    elif bpy.context.mode != 'OBJECT':
-        downloadlabel = "Import is available only in object mode"
+    elif context.mode != 'OBJECT':
+        downloadlabel = 'Import is available only in object mode'
+    elif skfb.manualImportBoolean and not model.uid:
+        downloadlabel = 'Enter a Sketchfab model URL'
     else:
-        downloadlabel = "Import model"
+        downloadlabel = 'Import model'
         if model.download_size:
-            downloadlabel += " ({})".format(model.download_size)
-    if skfb.import_status:
-        downloadlabel = skfb.import_status
+            downloadlabel += f' ({model.download_size})'
 
     download_icon = 'IMPORT' if import_ops.enabled else 'INFO'
     import_ops.scale_y = 2.0
-    import_ops.operator("wm.sketchfab_download", icon=download_icon, text=downloadlabel, translate=False, emboss=True).model_uid = model.uid
-
-def set_log(log):
-    get_sketchfab_props().status = log
-
-def unzip_archive(archive_path):
-    if os.path.exists(archive_path):
-        set_import_status('Unzipping model')
-        import zipfile
-        try:
-            zip_ref = zipfile.ZipFile(archive_path, 'r')
-            extract_dir = os.path.dirname(archive_path)
-            zip_ref.extractall(extract_dir)
-            zip_ref.close()
-        except zipfile.BadZipFile:
-            print('Error when dezipping file')
-            os.remove(archive_path)
-            print('Invalid zip. Try again')
-            set_import_status('')
-            return None, None
-
-        gltf_file = os.path.join(extract_dir, 'scene.gltf')
-        return gltf_file, archive_path
-
-    else:
-        print('ERROR: archive doesn\'t exist')
+    import_ops.operator("wm.sketchfab_download", icon=download_icon, text=downloadlabel,
+                        translate=False, emboss=True).model_uid = model.uid
 
 
-def run_async(func):
-    from threading import Thread
-    from functools import wraps
-
-    @wraps(func)
-    def async_func(*args, **kwargs):
-        func_hl = Thread(target=func, args=args, kwargs=kwargs)
-        func_hl.start()
-        return func_hl
-
-    return async_func
-
-
-def import_model(gltf_path, uid, title):
-    bpy.ops.wm.import_modal('INVOKE_DEFAULT', gltf_path=gltf_path, uid=uid, title=title)
+def import_gltf(path, title):
+    old_objects = set(bpy.data.objects)
+    if 'FINISHED' not in bpy.ops.import_scene.gltf(filepath=str(path), import_pack_images=True):
+        raise RuntimeError('Blender cancelled the glTF import')
+    bpy.context.view_layer.update()
+    Utils.clean_node_hierarchy([obj for obj in bpy.context.scene.objects if obj not in old_objects], title)
 
 
 def build_search_request(query, pbr, animated, staffpick, face_count, category, sort_by):
@@ -1231,50 +1060,6 @@ class LoginModal(bpy.types.Operator):
             self.error = True
             self.error_message = 'Could not verify your Sketchfab account; please try again'
 
-        return {'RUNNING_MODAL'}
-
-
-class ImportModalOperator(bpy.types.Operator):
-    """Imports the selected model into Blender"""
-    bl_idname = "wm.import_modal"
-    bl_label = "Import glTF model into Sketchfab"
-    bl_options = {'INTERNAL'}
-
-    gltf_path : StringProperty()
-    uid : StringProperty()
-    title: StringProperty()
-
-    def execute(self, context):
-        print('IMPORT')
-        return {'FINISHED'}
-
-    def modal(self, context, event):
-        # Detect available engines
-        available_engines = bpy.types.RenderSettings.bl_rna.properties['engine'].enum_items.keys()
-
-        # Prefer EEVEE_NEXT if available (Blender 4.0+)
-        target_engine = "BLENDER_EEVEE_NEXT" if "BLENDER_EEVEE_NEXT" in available_engines else "BLENDER_EEVEE"
-
-        # If current engine is not acceptable, switch it (leave Workbench alone)
-        if bpy.context.scene.render.engine not in ["CYCLES", "BLENDER_WORKBENCH", target_engine]:
-            bpy.context.scene.render.engine = target_engine
-
-        try:
-            old_objects = [o.name for o in bpy.data.objects] # Get the current objects inorder to find the new node hierarchy
-            bpy.ops.import_scene.gltf(filepath=self.gltf_path)
-            set_import_status('')
-            Utils.clean_downloaded_model_dir(self.uid)
-            Utils.clean_node_hierarchy([o for o in bpy.data.objects if o.name not in old_objects], self.title)
-            return {'FINISHED'}
-        except Exception:
-            import traceback
-            print(traceback.format_exc())
-            set_import_status('')
-            return {'FINISHED'}
-
-    def invoke(self, context, event):
-        context.window_manager.modal_handler_add(self)
-        set_import_status('Importing...')
         return {'RUNNING_MODAL'}
 
 
@@ -1637,10 +1422,6 @@ class SketchfabModel:
         self.license = None
         self.animated = False
 
-        # Download url data
-        self.download_url = None
-        self.time_url_requested = None
-        self.url_expires = None
 
 def ShowMessage(icon = "INFO", title = "Info", message = "Information"):
     def draw(self, context):
@@ -1652,22 +1433,96 @@ def ShowMessage(icon = "INFO", title = "Info", message = "Information"):
 class SketchfabDownloadModel(bpy.types.Operator):
     """Import the selected model"""
     bl_idname = "wm.sketchfab_download"
-    bl_label = "Downloading"
+    bl_label = "Import Sketchfab Model"
     bl_options = {'INTERNAL'}
 
-    model_uid : bpy.props.StringProperty(name="uid")
+    model_uid : StringProperty(name="uid")
 
     def execute(self, context):
-        props = context.window_manager.sketchfab_browser
-        link = props.manualImportPath if props.manualImportBoolean else ''
+        global active_download
+        wm = context.window_manager
+        props = wm.sketchfab_browser
+        api = props.skfb_api
+        if active_download is not None or context.mode != 'OBJECT' or not api.is_user_logged():
+            return {'CANCELLED'}
         try:
-            props.skfb_api.download_model(self.model_uid, link)
-        except (ValueError, requests.exceptions.RequestException) as error:
+            if props.manualImportBoolean:
+                uid, organization = parse_model_link(props.manualImportPath)
+                self.title = 'Sketchfab Model'
+            else:
+                uid = self.model_uid
+                if not MODEL_UID.fullmatch(uid):
+                    raise ValueError('Invalid Sketchfab model ID')
+                organization = api.active_org['username'] if api.use_org_profile and api.active_org else None
+                model = get_sketchfab_model(uid)
+                self.title = model.title if model else 'Sketchfab Model'
+
+            self.job = DownloadJob(Config.SKETCHFAB_MODEL_DIR, Config.SKETCHFAB_MODEL, Config.SKETCHFAB_ORGS,
+                                   Config.SKETCHFAB_ME + '/orgs', api.headers, uid, organization,
+                                   tuple(api.user_orgs) if api.orgs_loaded else None)
+        except (ValueError, OSError) as error:
             self.report({'ERROR'}, str(error))
             return {'CANCELLED'}
-        attribution = SF_Attributions()
-        attribution.request_model_attributions(self.model_uid)
-        return {'FINISHED'}
+
+        self.wm = wm
+        self.scene = context.scene
+        self.view_layer = context.view_layer
+        self.timer = None
+        try:
+            self.timer = wm.event_timer_add(0.2, window=context.window)
+            self.job.start()
+            wm.modal_handler_add(self)
+        except RuntimeError:
+            if not self.job.ident:
+                self.job.cleanup()
+            self.cancel(context)
+            self.report({'ERROR'}, 'Could not start the Sketchfab download')
+            return {'CANCELLED'}
+        active_download = self
+        redraw_sketchfab()
+        return {'RUNNING_MODAL'}
+
+    def modal(self, context, event):
+        if active_download is not self:
+            return {'CANCELLED'}
+        if event.type == 'ESC':
+            self.cancel(context)
+            return {'CANCELLED'}
+        if event.type != 'TIMER':
+            return {'PASS_THROUGH'}
+        if context.scene != self.scene or context.view_layer != self.view_layer:
+            self.cancel(context)
+            return {'CANCELLED'}
+        if self.job.is_alive():
+            redraw_sketchfab()
+            return {'PASS_THROUGH'}
+
+        try:
+            if self.job.error or self.job.path is None:
+                self.report({'ERROR'}, self.job.error or 'Could not download the model')
+                return {'CANCELLED'}
+            if context.mode != 'OBJECT':
+                self.report({'WARNING'}, 'Switch to Object Mode before importing a model')
+                return {'CANCELLED'}
+            title = self.job.metadata.get('name') or self.title
+            import_gltf(self.job.path, title)
+            record_download(self.job.metadata, self.job.uid, title)
+            return {'FINISHED'}
+        except (RuntimeError, TypeError, ValueError):
+            self.report({'ERROR'}, 'Blender could not import the Sketchfab glTF model')
+            return {'CANCELLED'}
+        finally:
+            self.cancel(context)
+
+    def cancel(self, context):
+        global active_download
+        if active_download is self:
+            active_download = None
+        if self.timer is not None:
+            self.wm.event_timer_remove(self.timer)
+            self.timer = None
+        self.job.cancel()
+        redraw_sketchfab()
 
 
 class ViewOnSketchfab(bpy.types.Operator):
@@ -2197,7 +2052,6 @@ classes = (
     SketchfabSearch,
     SketchfabSearchPreviousResults,
     SketchfabSearchNextResults,
-    ImportModalOperator,
     ViewOnSketchfab,
     SketchfabDownloadModel,
     SketchfabLogger,
@@ -2266,46 +2120,57 @@ def register():
         print("Sketchfab: failed to initialize cache directory during registration: {}".format(err))
 
     cached_login.register()
+    bpy.app.handlers.load_pre.append(cancel_transfers)
+    if hasattr(bpy.app.handlers, 'quit_pre'):
+        bpy.app.handlers.quit_pre.append(cancel_transfers)
 
-class SF_Attributions:
+def record_download(metadata, uid, title):
+    user = metadata.get('user')
+    if not isinstance(user, dict):
+        user = {}
+    license = metadata.get('license')
+    if not isinstance(license, dict):
+        license = {}
+    url = f'{Config.SKETCHFAB_URL}/models/{uid}'
+    username = user.get('username', '')
+    license_name = license.get('fullName') or license.get('label') or ''
+    if username and license_name:
+        credit = f'"{title}" ({url}) by {username} is licensed under {license_name}'
+        if license.get('url'):
+            credit += f' ({license["url"]})'
+        credit += '.'
+    else:
+        credit = f'"{title}" ({url}). Attribution unavailable.'
+    text = bpy.data.texts.get('sf_attributions') or bpy.data.texts.new('sf_attributions')
+    text.cursor_set(len(text.lines) - 1, character=len(text.lines[-1].body))
+    text.write(credit + '\n')
 
-    def append_to_attributions(self, text):
-        # Check if "sf_attributions" text file already exists
-        if "sf_attributions" not in bpy.data.texts:
-            # Create a new text file named "sf_attributions"
-            text_block = bpy.data.texts.new(name="sf_attributions")
-            print("Text file 'sf_attributions' created.")
-        else:
-            # Get the existing text file
-            text_block = bpy.data.texts["sf_attributions"]
-
-         # Move the cursor to the end of the text block
-        text_block.cursor_set(len(text_block.as_string()))
-
-        # Append the new text
-        text_block.write(text + "\n")
-        print("Credits appended to 'sf_attributions' file.")
-
-    def request_model_attributions(self, uid, callback=None):
-        self.uid = uid
-        callback = self.handle_model_attributions if callback is None else callback
-        url = Config.SKETCHFAB_MODEL + '/' + uid
-
-        model_infothr = GetRequestThread(url, callback)
-        model_infothr.start()
-
-    def handle_model_attributions(self, r, *args, **kwargs):
-        json_data = r.json()
+    addon = bpy.context.preferences.addons.get(__name__.split('.')[0])
+    history = addon.preferences.downloadHistory if addon else ''
+    if history:
         try:
-            self.append_to_attributions(f"\"{json_data['name']}\" ({json_data['viewerUrl']}) by {json_data['user']['username']} is licensed under {json_data['license']['fullName']} ({json_data['license']['url']}).")
-        except KeyError as err:
-            try:
-                self.append_to_attributions(f"Could not get attribution for UID: {self.uid}.")
-            except Exception as inner_err:
-                print(inner_err)
+            with open(os.path.abspath(history), 'a+', encoding='utf-8', newline='') as file:
+                writer = csv.writer(file)
+                if file.tell() == 0:
+                    writer.writerow(('Model name', 'Author name', 'Author url', 'License', 'Model link'))
+                author_url = f'{Config.SKETCHFAB_URL}/{username}' if username else ''
+                writer.writerow((title, user.get('displayName', username), author_url, license_name, url))
+        except OSError:
+            print('Sketchfab: could not save download history')
+
+
+@bpy.app.handlers.persistent
+def cancel_transfers(*args):
+    if active_download is not None:
+        active_download.cancel(bpy.context)
+
 
 def unregister():
     global is_plugin_enabled
+    cancel_transfers()
+    bpy.app.handlers.load_pre.remove(cancel_transfers)
+    if hasattr(bpy.app.handlers, 'quit_pre'):
+        bpy.app.handlers.quit_pre.remove(cancel_transfers)
     cached_login.unregister()
     for callback in (poll_search, poll_thumbnails):
         if bpy.app.timers.is_registered(callback):
