@@ -25,9 +25,10 @@ import json
 import shutil
 import sys
 from urllib.parse import quote_plus
-from uuid import UUID
 
 from .cached_login import CachedLogin
+from .model_links import MODEL_UID, model_endpoint, parse_model_link
+from .organization_api import fetch_organizations
 
 import bpy
 import bpy.utils.previews
@@ -271,13 +272,6 @@ class Utils:
         # Select the root Empty node
         root.select_set(True)
 
-    def is_valid_uuid(uuid_to_test, version=4):
-        try:
-            uuid_obj = UUID(hex=uuid_to_test, version=version)
-            return True
-        except ValueError:
-            return False
-
 class Cache:
     SKETCHFAB_CACHE_FILE = os.path.join(
         bpy.utils.user_resource("SCRIPTS", path="sketchfab_cache", create=True),
@@ -397,6 +391,7 @@ class SketchfabApi:
         self.search_request = None
         self.search_error = ''
         self.user_orgs = []
+        self.orgs_loaded = False
         self.user_has_orgs = False
         self.orgs_check_failed = False
         self.active_org = None
@@ -484,79 +479,27 @@ class SketchfabApi:
                             "Sketchfab returned HTTP {}, please try again".format(r.status_code))
 
     def request_user_orgs(self):
-        if not self.active_org:
-            requests.get(Config.SKETCHFAB_ME + "/orgs", headers=self.headers, hooks={'response': self.parse_orgs_info})
-            pass
+        if self.orgs_loaded or not self.is_user_logged():
+            return
+
+        def fetch(url):
+            response = requests.get(url, headers=self.headers, timeout=(3, 10))
+            response.raise_for_status()
+            return response.json()
+
+        try:
+            self.user_orgs = fetch_organizations(Config.SKETCHFAB_ME + '/orgs', Config.SKETCHFAB_ORGS, fetch)
+        except (requests.exceptions.RequestException, KeyError, TypeError, ValueError):
+            self.orgs_check_failed = True
+            return
+        self.orgs_loaded = True
+        self.orgs_check_failed = False
+        self.user_has_orgs = bool(self.user_orgs)
+        self.active_org = self.user_orgs[0] if self.user_orgs else None
 
     def on_user_orgs_check(self, r, *args, **kargs):
         self.orgs_check_failed = r.status_code != 200
         self.user_has_orgs = bool((r.status_code == 200) and len(r.json().get("results", [])))
-
-    def parse_orgs_info(self, r, *args, **kargs):
-        """
-        Get and store information about user's orgs, and its orgs projects
-        """
-        if r.status_code == 200:
-            orgs_data = r.json()
-
-            # Get a list of the user's orgs
-            for org in orgs_data["results"]:
-                self.user_orgs.append({
-                    "uid":         org["uid"],
-                    "displayName": org["displayName"],
-                    "username":    org["username"],
-                    "url":         org["publicProfileUrl"],
-                    "projects":    [],
-                })
-            self.user_orgs.sort(key = lambda x : x["displayName"])
-
-            # Iterate on the orgs to get lists of their projects
-            for org in self.user_orgs:
-
-                # Create the callback inline to keep a reference to the org uid
-                def parse_projects_info(r, *args, **kargs):
-                    """
-                    Get and store information about an org projects
-                    """
-                    if r.status_code == 200:
-                        projects_data = r.json()
-                        projects = projects_data["results"]
-                        # Add the projects to the orgs dict object
-                        for proj in projects:
-                            org_uid = proj["org"]["uid"]
-                            org = next((x for x in self.user_orgs if x["uid"] == org_uid))
-                            org["projects"].append({
-                                "uid":         proj["uid"],
-                                "name":        proj["name"],
-                                "slug":        proj["slug"],
-                                "modelCount":  proj["modelCount"],
-                                "memberCount": proj["memberCount"],
-                            })
-                        org["projects"].sort(key = lambda x : x["name"])
-
-                        # Iterate on all projects (not just the 24 first)
-                        if projects_data["next"] is not None:
-                            requests.get(
-                                projects_data["next"],
-                                headers=self.headers,
-                                hooks={'response': parse_projects_info}
-                            )
-
-                    else:
-                        print('Can not get projects info')
-
-                requests.get("%s/%s/projects" % (Config.SKETCHFAB_ORGS, org["uid"]),
-                    headers=self.headers,
-                    hooks={'response': parse_projects_info})
-
-            # Set the first org as active
-            if len(self.user_orgs):
-                self.active_org = self.user_orgs[0]
-                self.user_has_orgs = True
-
-            # Iterate on all orgs (not just the 24 first)
-            if orgs_data["next"] is not None:
-                requests.get(orgs_data["next"], headers=self.headers, hooks={'response': self.parse_orgs_info})
 
     def request_thumbnail(self, thumbnails_json, path):
         if path not in thumbnail_requests and not os.path.isfile(path):
@@ -664,67 +607,29 @@ class SketchfabApi:
         except:
             print("Error encountered while parsing model info request: {}".format(r.url))
 
-    def download_model(self, uid):
-        skfb_model = get_sketchfab_model(uid)
-        if skfb_model is not None: # The model comes from the search results
-            if skfb_model.download_url and (time.time() - skfb_model.time_url_requested < skfb_model.url_expires):
-                self.get_archive(skfb_model.download_url)
-            else:
-                skfb_model.download_url = None
-                skfb_model.url_expires = None
-                skfb_model.time_url_requested = None
-                self.write_model_info(skfb_model.title, skfb_model.author, skfb_model.username, skfb_model.license, uid)
-                requests.get(Utils.build_download_url(uid, self.use_org_profile, self.active_org), headers=self.headers, hooks={'response': self.handle_download})
-        else: # Model comes from a direct link
-            skfb = get_sketchfab_props()
-            download_url = ""
+    def download_model(self, uid, link):
+        path = None
+        if link:
+            uid, organization = parse_model_link(link)
+            if organization:
+                self.request_user_orgs()
+            path = model_endpoint(Config.SKETCHFAB_MODEL, Config.SKETCHFAB_ORGS, uid,
+                                  organization, self.user_orgs)
+        elif self.use_org_profile and self.active_org:
+            path = f'{Config.SKETCHFAB_ORGS}/{self.active_org["uid"]}/models/{uid}'
+        else:
+            path = model_endpoint(Config.SKETCHFAB_MODEL, Config.SKETCHFAB_ORGS, uid)
 
-            # If the model is in an org, find if the user has access to it
-            if "/orgs/" in skfb.manualImportPath:
-                try:
-                    orgName = skfb.manualImportPath.split("/orgs/")[1].split("/")[0]
-                    if skfb.skfb_api.user_has_orgs and not skfb.skfb_api.active_org:
-                        skfb.skfb_api.request_user_orgs()
-
-                    user_orgs = skfb.skfb_api.user_orgs
-                    orgUid = ""
-                    for org in user_orgs:
-                        if org["username"] == orgName:
-                            orgUid = org["uid"]
-                            break
-                    if orgUid:
-                        download_url = '{}/{}/models/{}/download'.format(Config.SKETCHFAB_ORGS, orgUid, uid)
-                    else:
-                        ShowMessage("ERROR", "User not in Organization", "User does not appear to belong to org %s" % (orgName))
-                        return
-                except:
-                    ShowMessage("ERROR", "Invalid url", "Cannot parse org name from url %s" % skfb.manualImportPath)
-                    return
-            # Otherwise, request a direct download and get model info
-            else:
-                download_url = Utils.build_download_url(uid)
-                requests.get('{}/{}'.format(Config.SKETCHFAB_MODEL, uid), headers=skfb.skfb_api.headers, hooks={'response': self.parse_model_info_request})
-
-            requests.get(download_url, headers=self.headers, hooks={'response': self.handle_download})
-
-    def handle_download(self, r, *args, **kwargs):
-        if r.status_code != 200 or 'gltf' not in r.json():
-            ShowMessage("ERROR", "This model is not downloadable", "Make sure your account has enough rights to download the model")
-            return
-
-        skfb = get_sketchfab_props()
-        uid = Utils.get_uid_from_model_url(r.url, self.use_org_profile)
-        if uid is None:
-            return
-
-        gltf = r.json()['gltf']
-        skfb_model = get_sketchfab_model(uid)
-
-        # If the model name is not known at this step, we could try to do an additional API call to get it
-        # This can happen when the user chose to import a model from its url
-        # However this adds an additional call and a bit of complexity for org models (need additional parsing),
-        # so for a simple hotfix models imported this way will be called "Sketchfab model"
-        self.get_archive(gltf['url'], skfb_model.title if skfb_model else "Sketchfab Model")
+        model = None if link else get_sketchfab_model(uid)
+        if model is None:
+            requests.get(path, headers=self.headers, hooks={'response': self.parse_model_info_request},
+                         timeout=(3, 10))
+        else:
+            self.write_model_info(model.title, model.author, model.username, model.license, uid)
+        response = requests.get(path + '/download', headers=self.headers, timeout=(3, 10))
+        if response.status_code != 200 or 'gltf' not in response.json():
+            raise ValueError('This model is not downloadable with your Sketchfab account')
+        self.get_archive(response.json()['gltf']['url'], model.title if model else 'Sketchfab Model')
 
     def get_archive(self, url, title):
         if url is None:
@@ -798,7 +703,7 @@ def get_user_orgs(self, context):
 
 def get_org_projects(self, context):
     api  = get_sketchfab_props().skfb_api
-    return [(proj["uid"], proj["name"], proj["name"]) for proj in api.active_org["projects"]]
+    return [(proj["uid"], proj["name"], proj["name"]) for proj in api.active_org["projects"]] if api.active_org else []
 
 def get_available_search_domains(self, context):
     api = get_sketchfab_props().skfb_api
@@ -823,29 +728,25 @@ def refresh_orgs(self, context):
     props = get_sketchfab_props()
     api   = props.skfb_api
 
-    api.use_org_profile = pprops.use_org_profile
-
-    if api.user_has_orgs and not api.active_org :
-        bpy.context.window.cursor_set("WAIT")
+    if pprops.use_org_profile and not api.orgs_loaded:
         api.request_user_orgs()
-        bpy.context.window.cursor_set("DEFAULT")
 
-    orgs = [org for org in api.user_orgs if org["uid"] == pprops.active_org]
-    api.active_org = orgs[0] if len(orgs) else None
+    if api.user_orgs:
+        api.active_org = next((org for org in api.user_orgs if org["uid"] == pprops.active_org), api.user_orgs[0])
+    api.use_org_profile = bool(pprops.use_org_profile and api.active_org)
+    props.use_org_profile = api.use_org_profile
+    if api.active_org:
+        props.active_org = api.active_org['uid']
 
-    if pprops.use_org_profile != props.use_org_profile:
-        props.use_org_profile = pprops.use_org_profile
-    if api.user_orgs and pprops.active_org != props.active_org:
-        props.active_org = pprops.active_org
-
-    if props.use_org_profile:
-        props.search_domain = "ACTIVE_ORG"
-        pprops.search_domain = "ACTIVE_ORG"
-    else:
-        props.search_domain = "DEFAULT"
-        pprops.search_domain = "DEFAULT"
-
+    domain = "ACTIVE_ORG" if api.use_org_profile else "DEFAULT"
+    pprops.is_refreshing = True
+    try:
+        props.search_domain = domain
+        pprops.search_domain = domain
+    finally:
+        pprops.is_refreshing = False
     refresh_search(self, context)
+
 
 def get_sorting_options(self, context):
     api = get_sketchfab_props().skfb_api
@@ -1102,7 +1003,7 @@ def draw_import_button(layout, model, context):
     import_ops = layout.row()
     skfb = get_sketchfab_props()
 
-    import_ops.enabled = skfb.skfb_api.is_user_logged() and bpy.context.mode == 'OBJECT' and Utils.is_valid_uuid(model.uid)
+    import_ops.enabled = skfb.skfb_api.is_user_logged() and bpy.context.mode == 'OBJECT' and bool(MODEL_UID.fullmatch(model.uid))
     if not skfb.skfb_api.is_user_logged():
         downloadlabel = 'Log in to download models'
     elif bpy.context.mode != 'OBJECT':
@@ -1615,9 +1516,10 @@ class SketchfabBrowse(View3DPanel, bpy.types.Panel):
                 draw_model_info(col, model, context)
                 draw_import_button(col, model, context)
         else:
-            uid = ""
-            if "sketchfab.com" in props.manualImportPath:
-                uid = props.manualImportPath[-32:]
+            try:
+                uid, _ = parse_model_link(props.manualImportPath)
+            except ValueError:
+                uid = ''
             m = Model(uid)
             draw_import_button(col, m, context)
 
@@ -1756,8 +1658,13 @@ class SketchfabDownloadModel(bpy.types.Operator):
     model_uid : bpy.props.StringProperty(name="uid")
 
     def execute(self, context):
-        skfb_api = context.window_manager.sketchfab_browser.skfb_api
-        skfb_api.download_model(self.model_uid)
+        props = context.window_manager.sketchfab_browser
+        link = props.manualImportPath if props.manualImportBoolean else ''
+        try:
+            props.skfb_api.download_model(self.model_uid, link)
+        except (ValueError, requests.exceptions.RequestException) as error:
+            self.report({'ERROR'}, str(error))
+            return {'CANCELLED'}
         attribution = SF_Attributions()
         attribution.request_model_attributions(self.model_uid)
         return {'FINISHED'}
@@ -2036,36 +1943,14 @@ def upload(filepath, filename):
 
         requestFunction = requests.put
 
-        if "sketchfab.com/" not in props.reuploadPath:
-            return upload_report("reupload url is malformed %s" % props.reuploadPath, 'ERROR')
-
-        # Get the model uid
         try:
-            modelUid = props.reuploadPath[-32:]
-            if not Utils.is_valid_uuid(modelUid):
-                return upload_report("reupload url does not end with a valid uid (32 characters string): %s" % props.reuploadPath, 'ERROR')
-        except:
-            return upload_report("reupload url is malformed %s" % props.reuploadPath, 'ERROR')
-
-        # If the model is in an org, find if the user has access to it
-        if "/orgs/" in props.reuploadPath:
-            if True:#try:
-                orgName = props.reuploadPath.split("/orgs/")[1].split("/")[0]
-                user_orgs = api.user_orgs
-                orgUid = ""
-                for org in user_orgs:
-                    if org["username"] == orgName:
-                        orgUid = org["uid"]
-                        break
-                if orgUid:
-                    uploadUrl = '{}/{}/models/{}'.format(Config.SKETCHFAB_ORGS, orgUid, modelUid)
-                else:
-                    return upload_report("User does not appear to belong to org %s" % (orgName), 'ERROR')
-            else:#aexcept:
-                return upload_report("Cannot parse the org name from the url %s" % props.reuploadPath, 'ERROR')
-        # Otherwise, request a direct reupload
-        else:
-            uploadUrl = '{}/{}'.format(Config.SKETCHFAB_MODEL, modelUid)
+            modelUid, organization = parse_model_link(props.reuploadPath)
+            if organization:
+                api.request_user_orgs()
+            uploadUrl = model_endpoint(Config.SKETCHFAB_MODEL, Config.SKETCHFAB_ORGS, modelUid,
+                                       organization, api.user_orgs)
+        except ValueError as error:
+            return upload_report(str(error), 'ERROR')
 
         _data = {
             "uid" : modelUid,
